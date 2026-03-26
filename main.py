@@ -1,59 +1,65 @@
-import tushare as ts
+import akshare as ak
 import pandas as pd
 import os
 import requests
 from datetime import datetime
 
 # 环境配置
-TUSHARE_TOKEN = os.getenv("TUSHARE_TOKEN", "")
 STOCK_LIST = os.getenv("STOCK_LIST", "600519").split(",")
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
-pro = ts.pro_api(TUSHARE_TOKEN)
 
 # 获取股票名称
 def get_name(ts_code):
-    df = pro.stock_basic(ts_code=ts_code, fields="name")
-    return df.iloc[0]["name"] if not df.empty else ts_code
+    code = ts_code.split(".")[0]
+    try:
+        stock_info = ak.stock_info_a_code_name()
+        name = stock_info[stock_info["code"] == code]["name"].values[0]
+        return name
+    except:
+        return ts_code
 
-# 核心指标计算（适中分析）
+# 核心指标计算（用 akshare 获取免费日线数据）
 def stock_analysis(ts_code):
-    end = datetime.now().strftime("%Y%m%d")
-    start = (datetime.now() - pd.Timedelta(days=60)).strftime("%Y%m%d")
-    df = pro.daily(ts_code=ts_code, start_date=start, end_date=end)
-    
-    if df.empty or len(df) < 20:
+    code = ts_code.split(".")[0]
+    try:
+        # 获取近60个交易日复权后数据
+        df = ak.stock_zh_a_daily(symbol=code, adjust="hfq")
+        df = df.tail(60)
+        if len(df) < 20:
+            return None
+    except Exception as e:
+        print(f"获取 {ts_code} 数据失败: {e}")
         return None
-    
-    df = df.sort_values("trade_date").reset_index(drop=True)
+
     last = df.iloc[-1]
     pre = df.iloc[-2]
 
-    # 均线趋势
-    df["ma5"] = df.close.rolling(5).mean()
-    df["ma10"] = df.close.rolling(10).mean()
-    df["ma20"] = df.close.rolling(20).mean()
+    # 均线趋势判断
+    df["ma5"] = df["close"].rolling(5).mean()
+    df["ma10"] = df["close"].rolling(10).mean()
+    df["ma20"] = df["close"].rolling(20).mean()
     
-    if last.close > df.ma5.iloc[-1] > df.ma10.iloc[-1]:
+    if last["close"] > df["ma5"].iloc[-1] > df["ma10"].iloc[-1]:
         trend = "多头趋势"
-    elif last.close < df.ma5.iloc[-1] < df.ma10.iloc[-1]:
+    elif last["close"] < df["ma5"].iloc[-1] < df["ma10"].iloc[-1]:
         trend = "空头趋势"
     else:
         trend = "震荡整理"
 
-    # MACD
-    df["ema12"] = df.close.ewm(span=12, adjust=False).mean()
-    df["ema26"] = df.close.ewm(span=26, adjust=False).mean()
-    df["dif"] = df.ema12 - df.ema26
-    df["dea"] = df.dif.ewm(span=9, adjust=False).mean()
-    macd = "偏多" if df.dif.iloc[-1] > df.dea.iloc[-1] else "偏空"
+    # MACD 多空判断
+    df["ema12"] = df["close"].ewm(span=12, adjust=False).mean()
+    df["ema26"] = df["close"].ewm(span=26, adjust=False).mean()
+    df["dif"] = df["ema12"] - df["ema26"]
+    df["dea"] = df["dif"].ewm(span=9, adjust=False).mean()
+    macd = "偏多" if df["dif"].iloc[-1] > df["dea"].iloc[-1] else "偏空"
 
-    # 量能
-    vol_avg = df.vol.iloc[-5:].mean()
-    vol_rate = last.vol / vol_avg if vol_avg > 0 else 1
+    # 量能状态
+    vol_avg = df["volume"].iloc[-5:].mean()
+    vol_rate = last["volume"] / vol_avg if vol_avg > 0 else 1
     vol = "放量" if vol_rate > 1.5 else "缩量" if vol_rate < 0.7 else "平量"
 
-    # RSI
-    delta = df.close.diff()
+    # RSI 超买超卖
+    delta = df["close"].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
     rs = gain / loss.replace(0, 0.0001)
@@ -66,15 +72,15 @@ def stock_analysis(ts_code):
     else:
         rsi_s = "正常"
 
-    # 支撑压力 + 涨跌幅
-    support = round(df.low.iloc[-10:].min(), 2)
-    pressure = round(df.high.iloc[-10:].max(), 2)
-    pct = round((last.close / pre.close - 1) * 100, 2)
+    # 支撑压力 & 涨跌幅
+    support = round(df["low"].iloc[-10:].min(), 2)
+    pressure = round(df["high"].iloc[-10:].max(), 2)
+    pct = round((last["close"] / pre["close"] - 1) * 100, 2)
 
     return {
         "name": get_name(ts_code),
         "code": ts_code,
-        "price": round(last.close, 2),
+        "price": round(last["close"], 2),
         "pct": pct,
         "trend": trend,
         "macd": macd,
@@ -84,7 +90,7 @@ def stock_analysis(ts_code):
         "pressure": pressure
     }
 
-# 生成报告
+# 生成四时段报告
 def make_report():
     now = datetime.now().strftime("%H:%M")
     if "09:30" in now:
@@ -101,12 +107,7 @@ def make_report():
     lines = [title, "------------------"]
     for code in STOCK_LIST:
         code = code.strip()
-        if not code.endswith((".SH", ".SZ")):
-            ts_code = f"{code}.SH" if code.startswith("6") else f"{code}.SZ"
-        else:
-            ts_code = code
-
-        res = stock_analysis(ts_code)
+        res = stock_analysis(code)
         if not res:
             continue
 
@@ -120,7 +121,7 @@ def make_report():
 
     return "\n".join(lines)
 
-# 飞书推送
+# 飞书纯文字推送
 def push(content):
     if not FEISHU_WEBHOOK_URL:
         return
@@ -129,8 +130,8 @@ def push(content):
             "msg_type": "text",
             "content": {"text": content}
         }, timeout=8)
-    except:
-        pass
+    except Exception as e:
+        print(f"推送失败: {e}")
 
 if __name__ == "__main__":
     report = make_report()
