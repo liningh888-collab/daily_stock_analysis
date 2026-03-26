@@ -52,7 +52,7 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
-          pip install pandas tushare requests python-dotenv
+          pip install pandas tushare requests python-dotenv tenacity
       
       - name: 创建目录
         run: mkdir -p data logs reports
