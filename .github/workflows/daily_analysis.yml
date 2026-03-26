@@ -2,10 +2,10 @@ name: 每日股票分析 (四时段推送)
 
 on:
   schedule:
-    - cron: '30 1 * * 1-5'
-    - cron: '30 3 * * 1-5'
-    - cron: '30 7 * * 1-5'
-    - cron: '30 9 * * 1-5'
+    - cron: '30 1 * * 1-5'     # 北京时间 09:30
+    - cron: '30 3 * * 1-5'     # 北京时间 11:30
+    - cron: '30 7 * * 1-5'     # 北京时间 15:30
+    - cron: '30 9 * * 1-5'     # 北京时间 17:30
   workflow_dispatch:
 
 jobs:
@@ -13,16 +13,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with: {python-version: '3.11', cache: 'pip'}
-      - name: 安装所有依赖
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装所有依赖（补全 json_repair）
         run: |
           pip install --upgrade pip
-          pip install pandas tushare requests python-dotenv tenacity fake-useragent sqlalchemy litellm
-      - name: 执行分析
+          pip install pandas tushare requests python-dotenv tenacity fake-useragent sqlalchemy litellm json_repair
+
+      - name: 执行股票分析
         env:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519' }}
         run: python main.py --simple-push --stocks $STOCK_LIST
+
+      - name: 上传日志
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: logs
+          path: logs/
