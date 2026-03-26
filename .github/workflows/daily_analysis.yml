@@ -1,11 +1,19 @@
-name: 每日股票分析
+name: 每日股票分析 (四时段推送)
 
 on:
-  # 定时触发 - 每天北京时间 18:00 (UTC 10:00)
+  # 定时触发：每天 9:30、11:30、15:30、17:30 执行
+  # 注意：GitHub 时间是 UTC 时间，需要换算北京时间
+  # 北京时间 9:30 = UTC 1:30
+  # 北京时间 11:30 = UTC 3:30
+  # 北京时间 15:30 = UTC 7:30
+  # 北京时间 17:30 = UTC 9:30
   schedule:
-    - cron: '0 10 * * 1-5'     # 周一到周五，UTC 10:00 = 北京时间 18:00
+    - cron: '30 1 * * 1-5'     # 9:30 开盘
+    - cron: '30 3 * * 1-5'     # 11:30 午盘
+    - cron: '30 7 * * 1-5'     # 15:30 收盘
+    - cron: '30 9 * * 1-5'     # 17:30 盘后总结
   
-  # 手动触发
+  # 手动触发（保留）
   workflow_dispatch:
     inputs:
       mode:
@@ -14,16 +22,11 @@ on:
         default: 'full'
         type: choice
         options:
-          - full          # 完整分析（股票+大盘）
-          - market-only   # 仅大盘复盘
-          - stocks-only   # 仅股票分析
-      force_run:
-        description: '强制运行（跳过交易日检查）'
-        required: false
-        default: false
-        type: boolean
+          - full          # 完整分析
+          - market-only   # 仅大盘
+          - stocks-only   # 仅个股
 
-# 并发控制：同一时间只运行一个分析任务
+# 并发控制
 concurrency:
   group: stock-analysis
   cancel-in-progress: false
@@ -31,12 +34,11 @@ concurrency:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    # 添加超时限制，防止任务卡死
-    timeout-minutes: 30
+    timeout-minutes: 15 # 缩短超时，避免占用资源
     
     steps:
-      - name: 随机延迟（避免固定时间访问）
-        run: sleep $((RANDOM % 60))  # 随机延迟0-60秒启动
+      - name: 随机延迟（避免服务器压力）
+        run: sleep $((RANDOM % 10))
       
       - name: 检出代码
         uses: actions/checkout@v5
@@ -50,171 +52,54 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install pandas tushare requests
       
-      - name: 创建必要目录
-        run: |
-          mkdir -p data logs reports
+      - name: 创建目录
+        run: mkdir -p data logs reports
       
-      - name: 执行股票分析
+      - name: 执行股票分析（分时段逻辑）
         env:
-          # ==========================================
-          # AI 配置（AIHubMix Gemini 国内代理版）
-          # ==========================================
-          # LiteLLM 关闭
-          LITELLM_CONFIG: ""
-          LITELLM_CONFIG_YAML: ""
-          LITELLM_API_KEY: ""
-          LITELLM_MODEL: ""
-
-          # Gemini AI（AIHubMix 代理，用你新创建的 GEMINI_API_KEY）
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: "gemini-2.5-flash"
-          GEMINI_MODEL_FALLBACK: "gemini-1.5-flash"
-          GEMINI_REQUEST_DELAY: "1.0"
-          
-          # AIHubMix 关闭
-          AIHUBMIX_KEY: ""
-
-          # OpenAI 兼容 API 关闭
-          OPENAI_API_KEY: ""
-          OPENAI_BASE_URL: ""
-          OPENAI_MODEL: ""
-
-          # Anthropic 关闭
-          ANTHROPIC_API_KEY: ""
-          ANTHROPIC_MODEL: ""
-
-          # ==========================================
-          # 数据源
-          # ==========================================
+          # ==================== 核心环境变量 ====================
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-          
-          # ==========================================
-          # 搜索服务（全部关闭）
-          # ==========================================
-          BOCHA_API_KEYS: ""
-          TAVILY_API_KEYS: ""
-          SERPAPI_API_KEYS: ""
-          MINIMAX_API_KEYS: ""
-          BRAVE_API_KEYS: ""
-          SEARXNG_BASE_URLS: ""
-          SEARXNG_PUBLIC_INSTANCES_ENABLED: "false"
-          
-          # ==========================================
-          # 通知渠道（仅保留飞书）
-          # ==========================================
-          
-          # 方式一：企业微信 Webhook（关闭）
-          WECHAT_WEBHOOK_URL: ""
-          WECHAT_MSG_TYPE: ""
-          
-          # 方式二：飞书 Webhook（保留你现有的 FEISHU_WEBHOOK_URL）
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          
-          # 其他通知渠道全部关闭
-          TELEGRAM_BOT_TOKEN: ""
-          TELEGRAM_CHAT_ID: ""
-          TELEGRAM_MESSAGE_THREAD_ID: ""
-          EMAIL_SENDER: ""
-          EMAIL_PASSWORD: ""
-          EMAIL_RECEIVERS: ""
-          EMAIL_SENDER_NAME: ""
-          PUSHOVER_USER_KEY: ""
-          PUSHOVER_API_TOKEN: ""
-          PUSHPLUS_TOKEN: ""
-          CUSTOM_WEBHOOK_URLS: ""
-          CUSTOM_WEBHOOK_BEARER_TOKEN: ""
-          DISCORD_WEBHOOK_URL: ""
-          DISCORD_BOT_TOKEN: ""
-          DISCORD_MAIN_CHANNEL_ID: ""
-          FEISHU_APP_ID: ""
-          FEISHU_APP_SECRET: ""
-          FEISHU_FOLDER_TOKEN: ""
-          ASTRBOT_URL: ""
-          ASTRBOT_TOKEN: ""
-          SERVERCHAN3_SENDKEY: ""
-          SLACK_WEBHOOK_URL: ""
-          SLACK_BOT_TOKEN: ""
-          SLACK_CHANNEL_ID: ""
-
-          # ==========================================
-          # 自选股配置
-          # ==========================================
           STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519' }}
+
+          # 无用配置清空（避免干扰）
+          GEMINI_API_KEY: ""
+          GEMINI_MODEL: ""
+          GEMINI_MODEL_FALLBACK: ""
+          GEMINI_REQUEST_DELAY: ""
+          LITELLM_CONFIG: ""
+          AIHUBMIX_KEY: ""
+          OPENAI_API_KEY: ""
+          ANTHROPIC_API_KEY: ""
           MARKET_REVIEW_REGION: "cn"
-          
-          # ==========================================
-          # 运行配置
-          # ==========================================
           REPORT_TYPE: "simple"
-          SINGLE_STOCK_NOTIFY: "false"
+          SINGLE_STOCK_NOTIFY: "true"
           MARKET_REVIEW_ENABLED: "true"
           ANALYSIS_DELAY: "0"
           TRADING_DAY_CHECK_ENABLED: "true"
-          
-          # ==========================================
-          # 系统配置
-          # ==========================================
           LOG_LEVEL: INFO
           MAX_WORKERS: "1"
           ENABLE_CHIP_DISTRIBUTION: "false"
-          REALTIME_SOURCE_PRIORITY: "tencent,akshare_sina,efinance,akshare_em"
+          REALTIME_SOURCE_PRIORITY: "tencent"
           
         run: |
-          # 处理 LITELLM YAML 配置文件
-          if [ -n "$LITELLM_CONFIG_YAML" ] && [ -n "$LITELLM_CONFIG" ]; then
-            echo "📝 使用 GitHub Actions Secrets/Variables 中的 LITELLM_CONFIG_YAML 配置"
-            # 确保目录存在
-            mkdir -p "$(dirname "$LITELLM_CONFIG")"
-            # 写入配置文件（覆盖已有文件）
-            echo "$LITELLM_CONFIG_YAML" > "$LITELLM_CONFIG"
-            echo "✅ LITELLM 配置文件已写入: $LITELLM_CONFIG"
-          fi
-
-          # 判断运行模式
-          MODE="${{ github.event.inputs.mode || 'full' }}"
+          # 获取北京时间
+          CURRENT_HOUR=$(TZ='Asia/Shanghai' date +%H)
+          CURRENT_MIN=$(TZ='Asia/Shanghai' date +%M)
           
           echo "=========================================="
-          echo "🚀 A股自选股智能分析系统"
+          echo "🚀 股票分析机器人 - 四时段推送"
           echo "=========================================="
-          echo "⏰ 时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
-          echo "🎯 运行模式: $MODE"
+          echo "⏰ 当前时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
           echo "📊 自选股: $STOCK_LIST"
-          echo "📝 报告类型: simple"
-          echo ""
           echo "=========================================="
-          echo "📋 配置检查"
-          echo "=========================================="
-          echo "【AI 配置】"
-          echo "  LiteLLM: ❌ 未配置"
-          echo "  Gemini API Key: ✅ 已配置（AIHubMix Gemini 2.5 Flash）"
-          echo "  AIHubMix Key: ❌ 未配置"
-          echo "  OpenAI API Key: ❌ 未配置"
-          echo "  Anthropic Key: ❌ 未配置"
-          echo ""
-          echo "【通知渠道】"
-          echo "  飞书: ✅ 已配置"
-          echo "=========================================="
-          echo ""
-          
-          # 构建命令行参数
-          FORCE_RUN_ARG=""
-          if [ "${{ github.event.inputs.force_run }}" = "true" ]; then
-            FORCE_RUN_ARG="--force-run"
-            echo "⚡ 已启用强制运行模式（跳过交易日检查）"
-          fi
 
-          # 执行分析
-          if [ "$MODE" = "market-only" ]; then
-            python main.py --market-review $FORCE_RUN_ARG
-          elif [ "$MODE" = "stocks-only" ]; then
-            python main.py --no-market-review $FORCE_RUN_ARG
-          else
-            python main.py $FORCE_RUN_ARG
-          fi
+          # 调用融合版main.py的--simple-push模式（纯文字推送）
+          python main.py --simple-push --stocks $STOCK_LIST
       
-      - name: 上传分析报告
+      - name: 上传报告
         uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -222,23 +107,11 @@ jobs:
           path: |
             reports/
             logs/
-          retention-days: 30
+          retention-days: 3
       
-      - name: 显示运行结果
+      - name: 显示结果
         if: always()
         run: |
-          echo ""
           echo "=========================================="
-          echo "📊 分析完成"
+          echo "📤 推送完成"
           echo "=========================================="
-          if [ -d "reports" ] && [ "$(ls -A reports 2>/dev/null)" ]; then
-            echo "生成的报告:"
-            ls -la reports/
-          else
-            echo "⚠️ 未生成报告文件"
-          fi
-          echo ""
-          if [ -f "logs/stock_analysis_$(date +%Y%m%d).log" ]; then
-            echo "📜 最近日志（最后 30 行）:"
-            tail -30 logs/stock_analysis_*.log 2>/dev/null || echo "无日志"
-          fi
