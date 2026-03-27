@@ -1,139 +1,220 @@
-import akshare as ak
-import pandas as pd
-import os
 import requests
+import json
+import logging
+import os
 from datetime import datetime
+import time
 
-# 环境配置
-STOCK_LIST = os.getenv("STOCK_LIST", "600519").split(",")
-FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
+# ======================== 1. 配置初始化 ========================
+# 读取配置文件（请确保配置文件路径正确）
+CONFIG_PATH = "C:\\Users\\ning\\.openclaw\\config.json"  # 替换为你的配置文件实际路径
+with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+    CONFIG = json.load(f)
 
-# 获取股票名称
-def get_name(ts_code):
-    code = ts_code.split(".")[0]
-    try:
-        stock_info = ak.stock_info_a_code_name()
-        name = stock_info[stock_info["code"] == code]["name"].values[0]
-        return name
-    except:
-        return ts_code
+# 初始化日志
+LOG_LEVEL = CONFIG['logging']['level'].upper()
+LOG_FILE = CONFIG['logging']['file']
+os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
-# 核心指标计算（用 akshare 获取免费日线数据）
-def stock_analysis(ts_code):
-    code = ts_code.split(".")[0]
-    try:
-        # 获取近60个交易日复权后数据
-        df = ak.stock_zh_a_daily(symbol=code, adjust="hfq")
-        df = df.tail(60)
-        if len(df) < 20:
-            return None
-    except Exception as e:
-        print(f"获取 {ts_code} 数据失败: {e}")
-        return None
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.DEBUG),
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        logging.StreamHandler()  # 同时输出到控制台
+    ]
+)
+logger = logging.getLogger(__name__)
 
-    last = df.iloc[-1]
-    pre = df.iloc[-2]
+# 股票配置
+STOCK_CONFIG = CONFIG.get('stock', {})
+STOCK_SYMBOLS = STOCK_CONFIG.get('symbols', [])
+STOCK_FIELDS = STOCK_CONFIG.get('api', {}).get('fields', {})
+RETRY_CONFIG = STOCK_CONFIG.get('api', {}).get('retry', {})
+MAX_RETRIES = RETRY_CONFIG.get('maxRetries', 3)
+RETRY_DELAY = RETRY_CONFIG.get('delayMs', 1000) / 1000  # 转换为秒
 
-    # 均线趋势判断
-    df["ma5"] = df["close"].rolling(5).mean()
-    df["ma10"] = df["close"].rolling(10).mean()
-    df["ma20"] = df["close"].rolling(20).mean()
-    
-    if last["close"] > df["ma5"].iloc[-1] > df["ma10"].iloc[-1]:
-        trend = "多头趋势"
-    elif last["close"] < df["ma5"].iloc[-1] < df["ma10"].iloc[-1]:
-        trend = "空头趋势"
-    else:
-        trend = "震荡整理"
+# 飞书配置
+FEISHU_CONFIG = CONFIG.get('channels', {}).get('feishu', {})
+FEISHU_WEBHOOK = FEISHU_CONFIG.get('webhook', {}).get('url', '')
+FEISHU_TIMEOUT = FEISHU_CONFIG.get('webhook', {}).get('timeout', 30)
+FEISHU_RETRY = FEISHU_CONFIG.get('webhook', {}).get('retry', {})
+FEISHU_MAX_RETRIES = FEISHU_RETRY.get('maxRetries', 3)
+EMPTY_DATA_MSG = STOCK_CONFIG.get('push', {}).get('emptyDataMessage', '今日无股票交易数据')
 
-    # MACD 多空判断
-    df["ema12"] = df["close"].ewm(span=12, adjust=False).mean()
-    df["ema26"] = df["close"].ewm(span=26, adjust=False).mean()
-    df["dif"] = df["ema12"] - df["ema26"]
-    df["dea"] = df["dif"].ewm(span=9, adjust=False).mean()
-    macd = "偏多" if df["dif"].iloc[-1] > df["dea"].iloc[-1] else "偏空"
+# ======================== 2. 核心函数 ========================
+def get_stock_data(stock_code):
+    """
+    获取单只股票数据（兼容date/trade_date字段）
+    :param stock_code: 股票代码
+    :return: 格式化的股票数据字典，失败返回None
+    """
+    # 这里替换为你的实际股票API调用逻辑
+    # 示例：调用股票数据接口（请替换为真实API）
+    stock_data = None
+    for retry in range(MAX_RETRIES):
+        try:
+            logger.debug(f"获取{stock_code}数据，第{retry+1}次尝试")
+            
+            # ------------------- 替换为你的真实API调用 -------------------
+            # 示例接口（仅演示，需替换）：
+            # response = requests.get(
+            #     f"你的股票API地址?code={stock_code}",
+            #     timeout=STOCK_CONFIG.get('api', {}).get('timeout', 30)
+            # )
+            # response.raise_for_status()
+            # stock_data = response.json()
+            # ------------------------------------------------------------
 
-    # 量能状态
-    vol_avg = df["volume"].iloc[-5:].mean()
-    vol_rate = last["volume"] / vol_avg if vol_avg > 0 else 1
-    vol = "放量" if vol_rate > 1.5 else "缩量" if vol_rate < 0.7 else "平量"
+            # 模拟数据（测试用，实际使用时删除）
+            stock_data = {
+                'trade_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'stock_code': stock_code,
+                'current_price': round(10 + (retry * 0.1), 2),
+                'price_change': round(0.2 + (retry * 0.05), 2)
+            }
+            break  # 成功获取数据，退出重试
+        
+        except Exception as e:
+            logger.error(f"获取{stock_code}数据失败（第{retry+1}次）：{str(e)}")
+            if retry < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY)
+            else:
+                logger.error(f"{stock_code}数据获取最终失败")
+                return None
 
-    # RSI 超买超卖
-    delta = df["close"].diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14).mean()
-    rs = gain / loss.replace(0, 0.0001)
-    rsi = 100 - (100 / (1 + rs))
-    rsi_v = round(rsi.iloc[-1], 1)
-    if rsi_v > 70:
-        rsi_s = "超买"
-    elif rsi_v < 30:
-        rsi_s = "超卖"
-    else:
-        rsi_s = "正常"
+    # 字段映射（解决'date'字段错误核心逻辑）
+    if stock_data:
+        formatted_data = {}
+        for old_field, new_field in STOCK_FIELDS.items():
+            # 优先用新字段，兼容旧字段
+            formatted_data[old_field] = stock_data.get(new_field, stock_data.get(old_field, '未知'))
+        
+        # 补充原始数据，避免信息丢失
+        formatted_data['raw'] = stock_data
+        logger.debug(f"{stock_code}数据格式化完成：{formatted_data}")
+        return formatted_data
+    return None
 
-    # 支撑压力 & 涨跌幅
-    support = round(df["low"].iloc[-10:].min(), 2)
-    pressure = round(df["high"].iloc[-10:].max(), 2)
-    pct = round((last["close"] / pre["close"] - 1) * 100, 2)
+def send_feishu_message(content):
+    """
+    发送消息到飞书
+    :param content: 消息内容（文本/Markdown）
+    :return: 是否发送成功
+    """
+    if not FEISHU_WEBHOOK:
+        logger.error("飞书Webhook地址未配置，无法发送消息")
+        return False
 
-    return {
-        "name": get_name(ts_code),
-        "code": ts_code,
-        "price": round(last["close"], 2),
-        "pct": pct,
-        "trend": trend,
-        "macd": macd,
-        "vol": vol,
-        "rsi": f"{rsi_v}({rsi_s})",
-        "support": support,
-        "pressure": pressure
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "msg_type": "text" if not FEISHU_CONFIG.get('message', {}).get('enableMarkdown') else "post",
+        "content": {
+            "text": content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        } if not FEISHU_CONFIG.get('message', {}).get('enableMarkdown') else {
+            "post": {
+                "zh-CN": {
+                    "title": "个股监测",
+                    "content": [[{"tag": "text", "text": content}]]
+                }
+            }
+        }
     }
 
-# 生成四时段报告
-def make_report():
-    now = datetime.now().strftime("%H:%M")
-    if "09:30" in now:
-        title = "早盘监测"
-    elif "11:30" in now:
-        title = "午盘综述"
-    elif "15:30" in now:
-        title = "收盘总结"
-    elif "17:30" in now:
-        title = "盘后分析"
+    for retry in range(FEISHU_MAX_RETRIES):
+        try:
+            response = requests.post(
+                FEISHU_WEBHOOK,
+                headers=headers,
+                json=payload,
+                timeout=FEISHU_TIMEOUT
+            )
+            response.raise_for_status()
+            result = response.json()
+            if result.get('code') == 0:
+                logger.info("飞书消息发送成功")
+                return True
+            else:
+                logger.error(f"飞书消息发送失败：{result.get('msg')}")
+        except Exception as e:
+            logger.error(f"发送飞书消息失败（第{retry+1}次）：{str(e)}")
+            if retry < FEISHU_MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY)
+    
+    logger.error("飞书消息发送最终失败")
+    return False
+
+def collect_stock_data():
+    """
+    批量获取所有监控股票数据
+    :return: 股票数据列表，空列表表示全部失败
+    """
+    stock_list = []
+    empty_count = 0
+
+    for code in STOCK_SYMBOLS:
+        data = get_stock_data(code)
+        if data:
+            stock_list.append(data)
+            logger.info(f"{code}数据获取成功")
+        else:
+            empty_count += 1
+            logger.warning(f"{code}无有效数据")
+
+    # 判断是否全部无数据
+    if empty_count == len(STOCK_SYMBOLS):
+        logger.warning("所有股票均无有效数据")
+        return []
+    return stock_list
+
+def format_stock_message(stock_data_list):
+    """
+    格式化股票数据为飞书消息内容
+    :param stock_data_list: 股票数据列表
+    :return: 格式化后的消息文本
+    """
+    if not stock_data_list:
+        return EMPTY_DATA_MSG
+
+    message = "📊 个股监测数据\n" + "-"*30 + "\n"
+    for stock in stock_data_list:
+        message += (
+            f"股票代码：{stock.get('code', '未知')}\n"
+            f"时间：{stock.get('date', '未知')}\n"
+            f"当前价格：{stock.get('price', '未知')} 元\n"
+            f"涨跌幅：{stock.get('change', '未知')}%\n"
+            + "-"*30 + "\n"
+        )
+    message += f"更新时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    return message
+
+# ======================== 3. 主执行流程 ========================
+def main():
+    """主函数：获取股票数据并推送到飞书"""
+    logger.info("===== 开始执行四时段股票推送任务 =====")
+    
+    # 1. 获取股票数据
+    stock_data = collect_stock_data()
+    
+    # 2. 格式化消息
+    message = format_stock_message(stock_data)
+    logger.debug(f"待发送消息：{message}")
+    
+    # 3. 发送到飞书
+    if STOCK_CONFIG.get('push', {}).get('enable', True):
+        send_success = send_feishu_message(message)
+        if send_success:
+            logger.info("===== 股票推送任务执行完成 =====")
+        else:
+            logger.error("===== 股票推送任务执行失败 =====")
+            # 如果配置了错误通知，可在此处补充告警逻辑
     else:
-        title = "个股监测"
-
-    lines = [title, "------------------"]
-    for code in STOCK_LIST:
-        code = code.strip()
-        res = stock_analysis(code)
-        if not res:
-            continue
-
-        lines.append(f"{res['name']} {res['code']}")
-        lines.append(f"价格：{res['price']}  涨跌幅：{res['pct']}%")
-        lines.append(f"趋势：{res['trend']}")
-        lines.append(f"MACD：{res['macd']}  量能：{res['vol']}")
-        lines.append(f"RSI：{res['rsi']}")
-        lines.append(f"支撑：{res['support']}  压力：{res['pressure']}")
-        lines.append("")
-
-    return "\n".join(lines)
-
-# 飞书纯文字推送
-def push(content):
-    if not FEISHU_WEBHOOK_URL:
-        return
-    try:
-        requests.post(FEISHU_WEBHOOK_URL, json={
-            "msg_type": "text",
-            "content": {"text": content}
-        }, timeout=8)
-    except Exception as e:
-        print(f"推送失败: {e}")
+        logger.info("推送功能已禁用，仅打印消息：\n" + message)
 
 if __name__ == "__main__":
-    report = make_report()
-    print(report)
-    push(report)
+    try:
+        main()
+    except Exception as e:
+        logger.critical(f"程序执行异常：{str(e)}", exc_info=True)
+        # 异常时发送告警到飞书
+        send_feishu_message(f"⚠️ 股票推送程序执行异常：{str(e)}")
