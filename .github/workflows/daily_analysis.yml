@@ -27,4 +27,6 @@ jobs:
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519' }}
+          # 关键新增：添加 CONFIG_CONTENT 环境变量，关联 GitHub Secrets
+          CONFIG_CONTENT: ${{ secrets.CONFIG_CONTENT }}
         run: python main.py
