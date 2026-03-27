@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import datetime
 import time
+import akshare as ak
 
 # ======================== 1. 配置初始化 ========================
 # 从 GitHub Secrets 读取配置
@@ -46,18 +47,59 @@ EMPTY_DATA_MSG = STOCK_CONFIG.get('push', {}).get('emptyDataMessage', '今日无
 
 # ======================== 2. 核心函数 ========================
 def get_stock_data(stock_code):
+    """
+    获取真实 A 股行情数据（替换原模拟数据）
+    :param stock_code: 股票代码（如 600968）
+    :return: 格式化的股票数据字典
+    """
     stock_data = None
     for retry in range(MAX_RETRIES):
         try:
             logger.debug(f"获取{stock_code}数据，第{retry+1}次尝试")
-
-            stock_data = {
-                'trade_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'stock_code': stock_code,
-                'current_price': round(10 + (retry * 0.1), 2),
-                'price_change': round(0.2 + (retry * 0.05), 2)
-            }
-            break
+            
+            # 方式1：获取实时行情（优先）
+            try:
+                # akshare 实时行情接口
+                stock_df = ak.stock_zh_a_spot_em()
+                # 筛选指定股票代码
+                stock_info = stock_df[stock_df['代码'] == stock_code]
+                
+                if not stock_info.empty:
+                    stock_info = stock_info.iloc[0]
+                    stock_data = {
+                        'stock_code': stock_code,
+                        'stock_name': stock_info['名称'],  # 新增：股票名称
+                        'trade_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'current_price': round(float(stock_info['最新价']), 2),
+                        'price_change': round(float(stock_info['涨跌幅']), 2),
+                        'open_price': round(float(stock_info['开盘价']), 2),    # 新增：开盘价
+                        'high_price': round(float(stock_info['最高价']), 2),    # 新增：最高价
+                        'low_price': round(float(stock_info['最低价']), 2)      # 新增：最低价
+                    }
+                    break
+            except Exception as e:
+                logger.warning(f"实时行情接口失败，尝试备用接口：{e}")
+                # 方式2：备用接口（历史数据）
+                stock_zh_a_hist_df = ak.stock_zh_a_hist(
+                    symbol=stock_code,
+                    period="daily",
+                    start_date=(datetime.now().date()).strftime("%Y%m%d"),
+                    end_date=(datetime.now().date()).strftime("%Y%m%d"),
+                    adjust="qfq"
+                )
+                if not stock_zh_a_hist_df.empty:
+                    hist_info = stock_zh_a_hist_df.iloc[0]
+                    stock_data = {
+                        'stock_code': stock_code,
+                        'stock_name': stock_code,  # 备用接口无名称
+                        'trade_date': hist_info['日期'],
+                        'current_price': round(float(hist_info['收盘']), 2),
+                        'price_change': round(float(hist_info['涨跌幅']), 2),
+                        'open_price': round(float(hist_info['开盘']), 2),
+                        'high_price': round(float(hist_info['最高']), 2),
+                        'low_price': round(float(hist_info['最低']), 2)
+                    }
+                    break
 
         except Exception as e:
             logger.error(f"获取{stock_code}数据失败（第{retry+1}次）：{str(e)}")
@@ -68,10 +110,11 @@ def get_stock_data(stock_code):
                 return None
 
     if stock_data:
+        # 字段映射兼容（保持原有逻辑）
         formatted_data = {}
         for old_field, new_field in STOCK_FIELDS.items():
             formatted_data[old_field] = stock_data.get(new_field, stock_data.get(old_field, '未知'))
-        formatted_data['raw'] = stock_data
+        formatted_data.update(stock_data)  # 合并所有字段
         logger.debug(f"{stock_code}数据格式化完成：{formatted_data}")
         return formatted_data
     return None
@@ -137,17 +180,24 @@ def collect_stock_data():
     return stock_list
 
 def format_stock_message(stock_data_list):
+    """
+    修复字段匹配问题，显示真实股票信息
+    """
     if not stock_data_list:
         return EMPTY_DATA_MSG
 
-    message = "📊 个股监测数据\n" + "-"*30 + "\n"
+    message = "📊 个股监测数据\n" + "-"*40 + "\n"
     for stock in stock_data_list:
         message += (
-            f"股票代码：{stock.get('code', '未知')}\n"
-            f"时间：{stock.get('date', '未知')}\n"
-            f"当前价格：{stock.get('price', '未知')} 元\n"
-            f"涨跌幅：{stock.get('change', '未知')}%\n"
-            + "-"*30 + "\n"
+            f"股票代码：{stock.get('stock_code', '未知')}\n"
+            f"股票名称：{stock.get('stock_name', '未知')}\n"  # 新增：显示股票名称
+            f"时间：{stock.get('trade_date', '未知')}\n"
+            f"当前价格：{stock.get('current_price', '未知')} 元\n"
+            f"涨跌幅：{stock.get('price_change', '未知')}%\n"
+            f"开盘价：{stock.get('open_price', '未知')} 元\n"  # 新增：开盘价
+            f"最高价：{stock.get('high_price', '未知')} 元\n"  # 新增：最高价
+            f"最低价：{stock.get('low_price', '未知')} 元\n"  # 新增：最低价
+            + "-"*40 + "\n"
         )
     message += f"更新时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     return message
