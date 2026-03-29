@@ -168,6 +168,38 @@ def get_real_stock(code):
         logger.error(f"{code} error: {e}")
         return None
 
+# ======================== 新增：自动生成操作建议 ========================
+def get_operation_suggest(s):
+    code = s["code"]
+    price = s["price"]
+    grade = s["grade"]
+    stop = s["stop"]
+    
+    # 本金10000 规则：单只<=30%, 总仓<=80%
+    if grade in ["🔥 强烈买入", "✅ 买入"]:
+        suggest_cash = 3000
+        decision = "📌 分析结论：安全度高，适合分批建仓"
+    elif grade == "观望":
+        suggest_cash = 2000 if code == "600028" else 3000
+        decision = "📌 分析结论：观望为主，回踩企稳再低吸"
+    else:
+        suggest_cash = 0
+        decision = "📌 分析结论：趋势偏弱，暂不参与"
+
+    # 买点（当前价小幅回调）
+    buy = round(price * 0.98, 2)
+    # 止盈 10%~15%
+    profit1 = round(price * 1.10, 2)
+    profit2 = round(price * 1.15, 2)
+
+    return f"""
+{decision}
+✅ 操作建议（15天波段）
+- 买点：{buy} 元附近
+- 仓位：{suggest_cash} 元（{suggest_cash//1000}成）
+- 止盈：{profit1} ~ {profit2} 元
+- 止损：{stop} 元（亏损≥5% 严格离场）"""
+
 # ======================== 新闻 & 推送 ========================
 def get_market_news():
     try:
@@ -197,8 +229,10 @@ def main():
         send_feishu(EMPTY_DATA_MSG)
         return
 
-    msg = "🧠 OpenClaw 专业量化分析报告\n" + "="*54 + "\n"
+    # 去掉了开头的 🧠 符号
+    msg = "OpenClaw 专业量化分析报告\n" + "="*54 + "\n"
     for s in stocks:
+        operate = get_operation_suggest(s)
         msg += f"""【{s['code']} {s['name']}】
 💵 现价：{s['price']} 元  |  涨跌幅：{s['change']}%
 📊 均线：MA5:{s['ma5']} MA10:{s['ma10']} MA20:{s['ma20']} MA60:{s['ma60']}
@@ -210,8 +244,17 @@ def main():
 🔥 综合评级：{s['grade']}
 🎯 建议仓位：{s['position']}
 🛡️ 动态止损：{s['stop']} 元
+{operate}
 ⏰ {s['time']}
 """ + "-"*54 + "\n"
+
+    # 资金总规划（固定10000本金）
+    msg += """
+💰 整体资金规划（本金 10000 元）
+- 单只最高：3000 元（3成）
+- 总持仓不超过：8000 元（8成）
+- 预留现金：2000 元（安全垫）
+"""
 
     msg += f"\n📰 市场要闻：\n{news}\n"
     msg += "\n⚠️ 本分析由AI量化生成，仅供学习，不构成投资建议。"
