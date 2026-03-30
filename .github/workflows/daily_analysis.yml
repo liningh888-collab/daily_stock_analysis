@@ -2,9 +2,9 @@ name: 每日股票分析 (四时段推送)
 
 on:
   schedule:
-    - cron: '30 1 * * 1-5'     # 北京时间 09:30
+    - cron: '0 1 * * 1-5'      # 北京时间 09:00
     - cron: '30 3 * * 1-5'     # 北京时间 11:30
-    - cron: '30 7 * * 1-5'     # 北京时间 15:30
+    - cron: '0 7 * * 1-5'      # 北京时间 15:00
     - cron: '30 9 * * 1-5'     # 北京时间 17:30
   workflow_dispatch:
 
@@ -20,13 +20,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: 安装极简依赖
-        run: pip install pandas akshare requests
+      - name: 安装依赖
+        run: pip install pandas akshare requests numpy
 
-      - name: 执行四时段推送
+      - name: 执行量化分析推送
         env:
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519' }}
-          # 关键新增：添加 CONFIG_CONTENT 环境变量，关联 GitHub Secrets
           CONFIG_CONTENT: ${{ secrets.CONFIG_CONTENT }}
         run: python main.py
