@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 # ======================== 股票列表 ========================
 MANUAL_STOCKS = CONFIG.get("stock", {}).get("symbols", [])
 FEISHU_WEBHOOK = CONFIG.get("channels", {}).get("feishu", {}).get("webhook", {}).get("url", "")
-EMPTY_DATA_MSG = "今日无额外优质标的，仅展示自选股"
 
 # 仓位规则
 TOTAL_CAPITAL = 10000
@@ -76,14 +75,6 @@ def check_macd_divergence(close, macd):
     top_div = price_high and not macd_high
     bot_div = price_low and not macd_low
     return top_div, bot_div
-
-# ======================== RPS 相对强度 ========================
-def calc_rps(df_returns, period=20):
-    if len(df_returns) < 500:
-        return pd.Series()
-    ret = df_returns.pct_change(period).iloc[-1]
-    rps = ret.rank(pct=True) * 100
-    return rps
 
 # ======================== 股票分析（自选强制推送，不过滤） ========================
 def analyze_stock_manual(code):
@@ -168,102 +159,6 @@ def analyze_stock_manual(code):
         logger.error(f"{code} 分析失败: {e}")
         return None
 
-# ======================== 优质股票筛选（高门槛，只推值得买的） ========================
-def analyze_stock_quality(code, global_rps):
-    try:
-        df_spot = ak.stock_zh_a_spot_em()
-        row = df_spot[df_spot["代码"] == code].iloc[0]
-        current = round(float(row["最新价"]), 2)
-        change = round(float(row["涨跌幅"]), 2)
-        name = row["名称"]
-        turnover = round(float(row.get("换手率", 0)), 2)
-        volume_ratio = round(float(row.get("量比", 1)), 2)
-        dde = round(float(row.get("DDE大单净量", 0)), 2)
-
-        if any(x in name for x in ["ST", "*ST", "退", "PT"]):
-            return None
-        if not (3 <= current <= 15):
-            return None
-        if turnover < 3 or turnover > 18:
-            return None
-        if volume_ratio < 1.2:
-            return None
-        if dde < 0:
-            return None
-
-        hist = ak.stock_zh_a_hist(
-            symbol=code, period="daily",
-            start_date=(datetime.now()-timedelta(days=180)).strftime("%Y%m%d"),
-            adjust="qfq"
-        )
-        if len(hist) < 60:
-            return None
-
-        close = hist["收盘"].astype(float)
-        high = hist["最高"].astype(float)
-        low = hist["最低"].astype(float)
-        vol = hist["成交量"].astype(float)
-
-        ma5 = round(close.rolling(5).mean().iloc[-1], 2)
-        ma10 = round(close.rolling(10).mean().iloc[-1], 2)
-        ma20 = round(close.rolling(20).mean().iloc[-1], 2)
-        ma60 = round(close.rolling(60).mean().iloc[-1], 2)
-
-        if not (ma5 > ma10 > ma20 and current > ma20):
-            return None
-
-        vol_ma5 = vol.rolling(5).mean().iloc[-1]
-        if vol.iloc[-1] < vol_ma5 * 1.5:
-            return None
-
-        rsi = round(calc_rsi(close).iloc[-1], 1)
-        if not (40 <= rsi <= 65):
-            return None
-
-        k, d, j = calc_kdj(high, low, close)
-        macd, signal = calc_macd(close)
-        atr = round(calc_atr(high, low, close).iloc[-1], 2)
-        top_div, bot_div = check_macd_divergence(close, macd)
-
-        if top_div:
-            return None
-
-        rps_score = 0
-        if global_rps is not None and code in global_rps.index:
-            rps_score = round(global_rps[code], 1)
-            if rps_score < 85:
-                return None
-
-        score = 0
-        if macd.iloc[-1] > signal.iloc[-1]: score += 2
-        if bot_div: score += 2
-        if current > ma60: score += 1
-        if volume_ratio > 1.8: score += 1
-
-        if score < 3:
-            return None
-
-        grade = "✅ 买入"
-        if score >= 5:
-            grade = "🔥 强烈买入"
-
-        stop = round(current * 0.94, 2)
-
-        return {
-            "code": code, "name": name, "price": current, "change": change,
-            "ma5": ma5, "ma10": ma10, "ma20": ma20, "ma60": ma60,
-            "vol_status": "量能强势", "atr": atr, "rsi": rsi,
-            "k": round(k.iloc[-1],1), "d": round(d.iloc[-1],1), "j": round(j.iloc[-1],1),
-            "macd": round(macd.iloc[-1],2), "signal": round(signal.iloc[-1],2),
-            "top_div": top_div, "bot_div": bot_div,
-            "trend": "上升", "grade": grade, "stop": stop,
-            "pool": "优质优选", "rps": rps_score,
-            "turnover": turnover, "volume_ratio": volume_ratio,
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-    except Exception as e:
-        return None
-
 # ======================== 操作建议 ========================
 def get_operation(s):
     p = s["price"]
@@ -273,119 +168,73 @@ def get_operation(s):
     profit2 = round(buy * 1.15, 2)
     stop = s["stop"]
 
-    conclusion = "📌 分析结论：趋势健康，资金共振，波段上涨概率高"
-    if s["grade"] == "观望":
-        conclusion = "📌 分析结论：震荡整理，回踩企稳再考虑低吸"
-    if s["grade"] in ["❌ 卖出", "⚠️ 减仓"]:
-        conclusion = "📌 分析结论：趋势走弱，注意控制风险"
-
     return f"""
-{conclusion}
-✅ 操作建议（15天波段）
-- 买点：{buy} 元附近
-- 仓位：{cash} 元（{cash//1000}成）
-- 止盈：{profit1} ~ {profit2} 元
-- 止损：{stop} 元（亏损≥5% 严格离场）"""
+✅ 操作建议
+- 买点：{buy} 元
+- 仓位：{cash} 元
+- 止盈：{profit1} ~ {profit2}
+- 止损：{stop} 元
+"""
 
-# ======================== 全市场 RPS ========================
-def get_global_rps():
-    try:
-        df = ak.stock_zh_a_spot_em()
-        df = df[~df["名称"].str.contains("ST|退|PT", na=False)]
-        codes = df["代码"].dropna().tolist()[:1200]
-        closes = {}
-        for code in codes:
-            try:
-                hist = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq",
-                                          start_date=(datetime.now()-timedelta(days=60)).strftime("%Y%m%d"))
-                if len(hist) >= 30:
-                    closes[code] = hist["收盘"].iloc[-20:]
-                time.sleep(0.1)
-            except:
-                continue
-        df_closes = pd.DataFrame(closes).dropna(axis=1)
-        return calc_rps(df_closes, 20)
-    except:
-        return None
-
-# ======================== 自动选优质股 ========================
-def get_best_stocks(global_rps):
-    try:
-        df = ak.stock_zh_a_spot_em()
-        df = df[
-            (~df["名称"].str.contains("ST|*ST|退", na=False)) &
-            (df["最新价"].astype(float) >= 3) &
-            (df["最新价"].astype(float) <= 15)
-        ]
-        codes = df["代码"].dropna().tolist()
-        res = []
-        for c in codes:
-            if len(res) >= 2:
-                break
-            stock = analyze_stock_quality(c, global_rps)
-            if stock:
-                res.append(stock)
-            time.sleep(0.2)
-        return res
-    except:
-        return []
-
-# ======================== 推送 ========================
+# ======================== 飞书推送（修复超长+失败无提示） ========================
 def send_feishu(text):
     if not FEISHU_WEBHOOK:
-        return False
-    try:
-        requests.post(FEISHU_WEBHOOK, json={"msg_type":"text","content":{"text":text}}, timeout=20)
-        return True
-    except:
+        logger.warning("飞书 Webhook 未配置")
         return False
 
-# ======================== 主程序 ========================
+    max_bytes = 19000
+    text_bytes = text.encode('utf-8')
+    if len(text_bytes) > max_bytes:
+        text = text_bytes[:max_bytes].decode('utf-8', 'ignore') + "\n...内容过长已截断"
+
+    try:
+        res = requests.post(
+            FEISHU_WEBHOOK,
+            json={"msg_type": "text", "content": {"text": text}},
+            timeout=20
+        )
+        logger.info(f"飞书推送结果：{res.status_code} {res.text}")
+        return True
+    except Exception as e:
+        logger.error(f"飞书推送失败：{e}")
+        return False
+
+# ======================== 主程序（确保自选股一定推送） ========================
 def main():
     selected = []
 
-    # 1）自选三只 强制全部推送
+    # 自选股强制加入
     for code in MANUAL_STOCKS:
-        s = analyze_stock_manual(code)
-        if s:
-            selected.append(s)
-        time.sleep(0.2)
+        stock = analyze_stock_manual(code)
+        if stock:
+            selected.append(stock)
+        time.sleep(0.3)
 
-    # 2）额外加 2 只市场优质强势股
-    logger.info("计算全市场 RPS 强度...")
-    global_rps = get_global_rps()
-    best_list = get_best_stocks(global_rps)
-    for a in best_list:
-        if a["code"] not in [x["code"] for x in selected]:
-            selected.append(a)
-
+    # 没有任何自选数据
     if not selected:
-        send_feishu(EMPTY_DATA_MSG)
+        send_feishu("⚠️ 自选股数据获取失败，今日无分析内容")
         return
 
-    msg = "🚀 OpenClaw 量化分析报告（自选+优质精选）\n" + "="*54 + "\n"
+    # 拼接报告
+    msg = "🚀 OpenClaw 每日量化分析\n" + "="*50 + "\n"
+
     for s in selected:
-        op = get_operation(s)
-        msg += f"""【{s['code']} {s['name']}】({s['pool']})
+        msg += f"""【{s['code']} {s['name']}】
 💵 现价：{s['price']} 元  |  涨跌幅：{s['change']}%
-📈 RPS：{s['rps']}  |  均线：MA5:{s['ma5']} MA10:{s['ma10']} MA20:{s['ma20']} MA60:{s['ma60']}
-📊 量价：{s['vol_status']} | ATR：{s['atr']}
+📈 均线：MA5:{s['ma5']} MA10:{s['ma10']} MA20:{s['ma20']}
+📊 量价：{s['vol_status']}
 🧪 RSI：{s['rsi']}  |  KDJ：{s['k']}/{s['d']}/{s['j']}
 📐 MACD：{s['macd']} / {s['signal']}
-📌 背离：顶背离{'是' if s['top_div'] else '否'} 底背离{'是' if s['bot_div'] else '否'}
-📊 趋势：{s['trend']}
-🔥 综合评级：{s['grade']}
-🛡️ 动态止损：{s['stop']} 元
-{op}
-⏰ {s['time']}
-""" + "-"*54 + "\n"
-
-    msg += f"""
-💰 整体资金规划（本金 10000 元）
-- 单只最高：3000 元（3成）
-- 总持仓不超过：8000 元（8成）
+🔥 评级：{s['grade']}
+🛡️ 止损：{s['stop']} 元
 """
-    msg += "\n⚠️ 本分析由AI量化生成，仅供学习，不构成投资建议。"
+        msg += get_operation(s)
+        msg += "-"*50 + "\n"
+
+    # 末尾提示
+    msg += "\n📌 今日无额外优质标的，仅展示自选股"
+    msg += "\n⚠️ 分析仅供学习，不构成投资建议。"
+
     send_feishu(msg)
 
 if __name__ == "__main__":
