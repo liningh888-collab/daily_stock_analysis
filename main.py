@@ -8,7 +8,7 @@ import akshare as ak
 import pandas as pd
 import numpy as np
 
-# ======================== 1. 配置初始化 ========================
+# ======================== 配置初始化 ========================
 config_content = os.environ.get("CONFIG_CONTENT")
 if not config_content:
     raise Exception("请在 GitHub Secrets 配置 CONFIG_CONTENT")
@@ -21,10 +21,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ======================== 重要：读取你手动关注的股票 ========================
+# ======================== 股票列表 ========================
 MANUAL_STOCKS = CONFIG.get("stock", {}).get("symbols", [])
 FEISHU_WEBHOOK = CONFIG.get("channels", {}).get("feishu", {}).get("webhook", {}).get("url", "")
-EMPTY_DATA_MSG = "今日无符合条件的股票交易数据"
+EMPTY_DATA_MSG = "今日无额外优质标的，仅展示自选股"
 
 # 仓位规则
 TOTAL_CAPITAL = 10000
@@ -36,7 +36,8 @@ def calc_rsi(series, n=14):
     delta = series.diff()
     gain = delta.clip(lower=0).rolling(n).mean()
     loss = -delta.clip(upper=0).rolling(n).mean()
-    rs = gain / loss
+    rs = gain / loss.replace(0, np.nan)
+    rs = rs.fillna(0)
     return 100 - (100 / (1 + rs))
 
 def calc_macd(series):
@@ -49,7 +50,8 @@ def calc_macd(series):
 def calc_kdj(high, low, close):
     low_list = low.rolling(9).min()
     high_list = high.rolling(9).max()
-    rsv = (close - low_list) / (high_list - low_list) * 100
+    rsv = (close - low_list) / (high_list - low_list).replace(0, np.nan) * 100
+    rsv = rsv.fillna(0)
     k = rsv.ewm(span=3, adjust=False).mean()
     d = k.ewm(span=3, adjust=False).mean()
     j = 3 * k - 2 * d
@@ -75,8 +77,16 @@ def check_macd_divergence(close, macd):
     bot_div = price_low and not macd_low
     return top_div, bot_div
 
-# ======================== 股票分析函数 ========================
-def analyze_stock(code, pool_type="自选"):
+# ======================== RPS 相对强度 ========================
+def calc_rps(df_returns, period=20):
+    if len(df_returns) < 500:
+        return pd.Series()
+    ret = df_returns.pct_change(period).iloc[-1]
+    rps = ret.rank(pct=True) * 100
+    return rps
+
+# ======================== 股票分析（自选强制推送，不过滤） ========================
+def analyze_stock_manual(code):
     try:
         df_spot = ak.stock_zh_a_spot_em()
         row = df_spot[df_spot["代码"] == code].iloc[0]
@@ -104,10 +114,11 @@ def analyze_stock(code, pool_type="自选"):
         ma20 = round(close.rolling(20).mean().iloc[-1], 2)
         ma60 = round(close.rolling(60).mean().iloc[-1], 2)
 
+        vol_ma5 = vol.rolling(5).mean().iloc[-1]
         vol_status = "量价偏弱"
-        if vol.iloc[-1] > vol.rolling(5).mean().iloc[-1] * 1.2:
+        if vol.iloc[-1] > vol_ma5 * 1.2:
             vol_status = "量价健康"
-        elif vol.iloc[-1] < vol.rolling(5).mean().iloc[-1] * 0.8:
+        elif vol.iloc[-1] < vol_ma5 * 0.8:
             vol_status = "量能萎缩"
 
         rsi = round(calc_rsi(close).iloc[-1], 1)
@@ -122,20 +133,21 @@ def analyze_stock(code, pool_type="自选"):
         elif ma5 < ma10 < ma20 and current < ma20:
             trend = "下跌"
 
-        # 综合评级
         score = 0
         if rsi < 35: score += 1
-        if rsi > 65: score -= 1
         if macd.iloc[-1] > signal.iloc[-1]: score += 1
         if bot_div: score += 2
-        if top_div: score -= 2
         if current > ma20: score += 1
 
         grade = "观望"
-        if score >= 4: grade = "🔥 强烈买入"
-        elif score >= 2: grade = "✅ 买入"
-        elif score <= -3: grade = "❌ 卖出"
-        elif score <= -1: grade = "⚠️ 减仓"
+        if score >= 4:
+            grade = "🔥 强烈买入"
+        elif score >= 2:
+            grade = "✅ 买入"
+        elif score <= -3:
+            grade = "❌ 卖出"
+        elif score <= -1:
+            grade = "⚠️ 减仓"
 
         stop = round(current - 1.6 * atr, 2)
         if stop < current * 0.93:
@@ -149,29 +161,123 @@ def analyze_stock(code, pool_type="自选"):
             "macd": round(macd.iloc[-1],2), "signal": round(signal.iloc[-1],2),
             "top_div": top_div, "bot_div": bot_div,
             "trend": trend, "grade": grade, "stop": stop,
-            "pool": pool_type, "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "pool": "自选关注", "rps": "-",
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
     except Exception as e:
         logger.error(f"{code} 分析失败: {e}")
         return None
 
+# ======================== 优质股票筛选（高门槛，只推值得买的） ========================
+def analyze_stock_quality(code, global_rps):
+    try:
+        df_spot = ak.stock_zh_a_spot_em()
+        row = df_spot[df_spot["代码"] == code].iloc[0]
+        current = round(float(row["最新价"]), 2)
+        change = round(float(row["涨跌幅"]), 2)
+        name = row["名称"]
+        turnover = round(float(row.get("换手率", 0)), 2)
+        volume_ratio = round(float(row.get("量比", 1)), 2)
+        dde = round(float(row.get("DDE大单净量", 0)), 2)
+
+        if any(x in name for x in ["ST", "*ST", "退", "PT"]):
+            return None
+        if not (3 <= current <= 15):
+            return None
+        if turnover < 3 or turnover > 18:
+            return None
+        if volume_ratio < 1.2:
+            return None
+        if dde < 0:
+            return None
+
+        hist = ak.stock_zh_a_hist(
+            symbol=code, period="daily",
+            start_date=(datetime.now()-timedelta(days=180)).strftime("%Y%m%d"),
+            adjust="qfq"
+        )
+        if len(hist) < 60:
+            return None
+
+        close = hist["收盘"].astype(float)
+        high = hist["最高"].astype(float)
+        low = hist["最低"].astype(float)
+        vol = hist["成交量"].astype(float)
+
+        ma5 = round(close.rolling(5).mean().iloc[-1], 2)
+        ma10 = round(close.rolling(10).mean().iloc[-1], 2)
+        ma20 = round(close.rolling(20).mean().iloc[-1], 2)
+        ma60 = round(close.rolling(60).mean().iloc[-1], 2)
+
+        if not (ma5 > ma10 > ma20 and current > ma20):
+            return None
+
+        vol_ma5 = vol.rolling(5).mean().iloc[-1]
+        if vol.iloc[-1] < vol_ma5 * 1.5:
+            return None
+
+        rsi = round(calc_rsi(close).iloc[-1], 1)
+        if not (40 <= rsi <= 65):
+            return None
+
+        k, d, j = calc_kdj(high, low, close)
+        macd, signal = calc_macd(close)
+        atr = round(calc_atr(high, low, close).iloc[-1], 2)
+        top_div, bot_div = check_macd_divergence(close, macd)
+
+        if top_div:
+            return None
+
+        rps_score = 0
+        if global_rps is not None and code in global_rps.index:
+            rps_score = round(global_rps[code], 1)
+            if rps_score < 85:
+                return None
+
+        score = 0
+        if macd.iloc[-1] > signal.iloc[-1]: score += 2
+        if bot_div: score += 2
+        if current > ma60: score += 1
+        if volume_ratio > 1.8: score += 1
+
+        if score < 3:
+            return None
+
+        grade = "✅ 买入"
+        if score >= 5:
+            grade = "🔥 强烈买入"
+
+        stop = round(current * 0.94, 2)
+
+        return {
+            "code": code, "name": name, "price": current, "change": change,
+            "ma5": ma5, "ma10": ma10, "ma20": ma20, "ma60": ma60,
+            "vol_status": "量能强势", "atr": atr, "rsi": rsi,
+            "k": round(k.iloc[-1],1), "d": round(d.iloc[-1],1), "j": round(j.iloc[-1],1),
+            "macd": round(macd.iloc[-1],2), "signal": round(signal.iloc[-1],2),
+            "top_div": top_div, "bot_div": bot_div,
+            "trend": "上升", "grade": grade, "stop": stop,
+            "pool": "优质优选", "rps": rps_score,
+            "turnover": turnover, "volume_ratio": volume_ratio,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    except Exception as e:
+        return None
+
 # ======================== 操作建议 ========================
 def get_operation(s):
     p = s["price"]
-    pool = s["pool"]
-    cash = 3000 if pool in ["低位","趋势","自选"] else 2000
-    if cash > 3000: cash = 3000
-
+    cash = min(3000, MAX_SINGLE)
     buy = round(p * 0.97, 2)
     profit1 = round(buy * 1.10, 2)
     profit2 = round(buy * 1.15, 2)
     stop = s["stop"]
 
-    conclusion = "📌 分析结论：观望为主，回踩企稳再低吸"
-    if s["grade"] in ["🔥 强烈买入","✅ 买入"]:
-        conclusion = "📌 分析结论：趋势健康，可分批建仓"
-    elif s["grade"] in ["❌ 卖出","⚠️ 减仓"]:
-        conclusion = "📌 分析结论：趋势走弱，控制风险"
+    conclusion = "📌 分析结论：趋势健康，资金共振，波段上涨概率高"
+    if s["grade"] == "观望":
+        conclusion = "📌 分析结论：震荡整理，回踩企稳再考虑低吸"
+    if s["grade"] in ["❌ 卖出", "⚠️ 减仓"]:
+        conclusion = "📌 分析结论：趋势走弱，注意控制风险"
 
     return f"""
 {conclusion}
@@ -181,26 +287,55 @@ def get_operation(s):
 - 止盈：{profit1} ~ {profit2} 元
 - 止损：{stop} 元（亏损≥5% 严格离场）"""
 
-# ======================== 全市场选股 ========================
-def get_auto_stocks():
+# ======================== 全市场 RPS ========================
+def get_global_rps():
     try:
         df = ak.stock_zh_a_spot_em()
-        df = df[(df["最新价"].astype(float) <= 15) & (~df["名称"].str.contains("ST|退", na=False))]
-        codes = df["代码"].tolist()[:30]
-        auto = []
+        df = df[~df["名称"].str.contains("ST|退|PT", na=False)]
+        codes = df["代码"].dropna().tolist()[:1200]
+        closes = {}
+        for code in codes:
+            try:
+                hist = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq",
+                                          start_date=(datetime.now()-timedelta(days=60)).strftime("%Y%m%d"))
+                if len(hist) >= 30:
+                    closes[code] = hist["收盘"].iloc[-20:]
+                time.sleep(0.1)
+            except:
+                continue
+        df_closes = pd.DataFrame(closes).dropna(axis=1)
+        return calc_rps(df_closes, 20)
+    except:
+        return None
+
+# ======================== 自动选优质股 ========================
+def get_best_stocks(global_rps):
+    try:
+        df = ak.stock_zh_a_spot_em()
+        df = df[
+            (~df["名称"].str.contains("ST|*ST|退", na=False)) &
+            (df["最新价"].astype(float) >= 3) &
+            (df["最新价"].astype(float) <= 15)
+        ]
+        codes = df["代码"].dropna().tolist()
+        res = []
         for c in codes:
-            if len(auto) >= 3: break
-            s = analyze_stock(c, pool_type="自动优选")
-            if s: auto.append(s)
-        return auto
+            if len(res) >= 2:
+                break
+            stock = analyze_stock_quality(c, global_rps)
+            if stock:
+                res.append(stock)
+            time.sleep(0.2)
+        return res
     except:
         return []
 
 # ======================== 推送 ========================
 def send_feishu(text):
-    if not FEISHU_WEBHOOK: return False
+    if not FEISHU_WEBHOOK:
+        return False
     try:
-        requests.post(FEISHU_WEBHOOK, json={"msg_type":"text","content":{"text":text}}, timeout=15)
+        requests.post(FEISHU_WEBHOOK, json={"msg_type":"text","content":{"text":text}}, timeout=20)
         return True
     except:
         return False
@@ -209,14 +344,18 @@ def send_feishu(text):
 def main():
     selected = []
 
-    # 1. 加入你手动关注的票（海油发展、蓝焰控股、中国石化）
+    # 1）自选三只 强制全部推送
     for code in MANUAL_STOCKS:
-        s = analyze_stock(code, pool_type="自选关注")
-        if s: selected.append(s)
+        s = analyze_stock_manual(code)
+        if s:
+            selected.append(s)
+        time.sleep(0.2)
 
-    # 2. 加入自动优选票（低位+趋势+超跌）
-    auto_list = get_auto_stocks()
-    for a in auto_list:
+    # 2）额外加 2 只市场优质强势股
+    logger.info("计算全市场 RPS 强度...")
+    global_rps = get_global_rps()
+    best_list = get_best_stocks(global_rps)
+    for a in best_list:
         if a["code"] not in [x["code"] for x in selected]:
             selected.append(a)
 
@@ -224,13 +363,13 @@ def main():
         send_feishu(EMPTY_DATA_MSG)
         return
 
-    msg = "OpenClaw 专业量化分析报告\n" + "="*54 + "\n"
+    msg = "🚀 OpenClaw 量化分析报告（自选+优质精选）\n" + "="*54 + "\n"
     for s in selected:
         op = get_operation(s)
         msg += f"""【{s['code']} {s['name']}】({s['pool']})
 💵 现价：{s['price']} 元  |  涨跌幅：{s['change']}%
-📊 均线：MA5:{s['ma5']} MA10:{s['ma10']} MA20:{s['ma20']} MA60:{s['ma60']}
-📈 量价：{s['vol_status']}  |  ATR波动：{s['atr']}
+📈 RPS：{s['rps']}  |  均线：MA5:{s['ma5']} MA10:{s['ma10']} MA20:{s['ma20']} MA60:{s['ma60']}
+📊 量价：{s['vol_status']} | ATR：{s['atr']}
 🧪 RSI：{s['rsi']}  |  KDJ：{s['k']}/{s['d']}/{s['j']}
 📐 MACD：{s['macd']} / {s['signal']}
 📌 背离：顶背离{'是' if s['top_div'] else '否'} 底背离{'是' if s['bot_div'] else '否'}
@@ -245,13 +384,9 @@ def main():
 💰 整体资金规划（本金 10000 元）
 - 单只最高：3000 元（3成）
 - 总持仓不超过：8000 元（8成）
-- 配置：自选股 + 自动优选 = 安全分散
 """
     msg += "\n⚠️ 本分析由AI量化生成，仅供学习，不构成投资建议。"
     send_feishu(msg)
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        send_feishu(f"系统异常：{str(e)}")
+    main()
