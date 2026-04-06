@@ -2,13 +2,15 @@ import requests
 import json
 import logging
 import os
-from datetime import datetime, timedelta
 import time
+import random
+from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 import yfinance as yf
 
-# ======================== 日志配置 ========================
+# ======================== 全局配置 ========================
+# 日志配置
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -16,41 +18,66 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ======================== 配置加载 ========================
-config_content = os.environ.get("CONFIG_CONTENT")
-if not config_content:
+# 核心配置
+CONFIG_CONTENT = os.environ.get("CONFIG_CONTENT")
+if not CONFIG_CONTENT:
     raise Exception("❌ 未配置 CONFIG_CONTENT 环境变量")
 try:
-    CONFIG = json.loads(config_content)
+    CONFIG = json.loads(CONFIG_CONTENT)
 except json.JSONDecodeError:
     raise Exception("❌ CONFIG_CONTENT 不是合法的 JSON 格式")
 
-# 飞书 Webhook 配置
+# 飞书Webhook
 FEISHU_WEBHOOK = CONFIG.get("channels", {}).get("feishu", {}).get("webhook", {}).get("url", "")
 if not FEISHU_WEBHOOK:
     logger.warning("⚠️ 未配置飞书 Webhook，推送功能将失效")
 
-# ======================== 核心配置 ========================
-# A股 yfinance 代码映射（.SZ=深交所，.SS=上交所）
-STOCK_MAP = {
+# 选股参数
+SELECTION_TOP_N = 5  # 最终推送N只股票
+HIST_DAYS = 90       # 技术面分析天数
+CAPITAL = 10000      # 本金
+SINGLE_MAX = 3000    # 单只股票最大持仓
+
+# 基本面筛选阈值（可根据需求调整）
+FUNDAMENTAL_FILTER = {
+    "pe_max": 30,    # 市盈率上限
+    "pb_max": 5,     # 市净率上限
+    "market_cap_min": 100  # 市值下限（亿）
+}
+
+# 你原有自选股（优先保留）
+MY_STOCKS = {
     "000968.SZ": "蓝焰控股",
     "600028.SS": "中国石化",
     "600968.SS": "海油发展"
 }
-CAPITAL = 10000
-SINGLE_MAX = 3000
-HIST_DAYS = 90  # 历史数据天数
 
-# ======================== 指标计算（通用版） ========================
-def calc_indicators(df):
+# 全市场扫描池（沪深300+中证500核心成分股，精简版）
+# 如需更全的池，可替换为完整成分股列表
+MARKET_SCAN_POOL = {
+    # 沪深300核心
+    "600000.SS": "浦发银行", "600016.SS": "民生银行", "600036.SS": "招商银行",
+    "601318.SS": "中国平安", "601689.SS": "拓普集团", "601899.SS": "紫金矿业",
+    "000858.SZ": "五粮液",   "000895.SZ": "双汇发展", "002594.SZ": "比亚迪",
+    "300750.SZ": "宁德时代", "600519.SS": "贵州茅台", "601012.SS": "隆基绿能",
+    # 中证500核心
+    "000725.SZ": "京东方A",  "002475.SZ": "立讯精密", "002304.SZ": "洋河股份",
+    "601898.SS": "中煤能源", "601989.SS": "中国重工", "600309.SS": "万华化学",
+    "002230.SZ": "科大讯飞", "002415.SZ": "海康威视", "600887.SS": "伊利股份",
+    "600438.SS": "通威股份", "000333.SZ": "美的集团", "601601.SS": "中国太保"
+}
+
+# ======================== 核心工具函数 ========================
+def calc_technical_indicators(df):
+    """计算技术面指标（RSI/MACD/KDJ/均线）"""
     df = df.copy().sort_index()
     close = df["Close"].astype(float)
     high = df["High"].astype(float)
     low = df["Low"].astype(float)
 
     # 均线
-    ma5 = close.rolling(5).mean()
-    ma20 = close.rolling(20).mean()
+    ma5 = close.rolling(5, min_periods=1).mean()
+    ma20 = close.rolling(20, min_periods=1).mean()
 
     # RSI(14)
     delta = close.diff()
@@ -71,8 +98,8 @@ def calc_indicators(df):
     tr = high9 - low9
     tr = tr.replace(0, 1)
     rsv = (close - low9) / tr * 100
-    k = rsv.ewm(span=3, adjust=False).mean()
-    d = k.ewm(span=3, adjust=False).mean()
+    k = rsv.ewm(span=3).mean()
+    d = k.ewm(span=3).mean()
     j = 3 * k - 2 * d
 
     last = -1
@@ -90,121 +117,201 @@ def calc_indicators(df):
         "trend_up": bool(close.iloc[last] > ma20.iloc[last])
     }
 
-# ======================== 数据获取（yfinance 唯一数据源） ========================
-def get_stock_history(symbol):
+def get_fundamental_data(symbol):
+    """获取基本面数据（PE/PB/市值）"""
     try:
-        logger.info(f"📡 正在获取 {symbol} 历史数据...")
         tk = yf.Ticker(symbol)
-        df = tk.history(period=f"{HIST_DAYS}d", timeout=15)
-        if len(df) >= 30:
-            logger.info(f"✅ {symbol} 数据获取成功，共 {len(df)} 条")
-            return calc_indicators(df)
-        logger.warning(f"⚠️ {symbol} 数据不足（{len(df)}条）")
-        return None
+        info = tk.info
+        
+        # 提取核心基本面指标
+        pe = info.get("trailingPE", 999)  # 市盈率
+        pb = info.get("priceToBook", 999) # 市净率
+        # 市值（转成亿）
+        market_cap = info.get("marketCap", 0) / 1e8 if info.get("marketCap") else 0
+        
+        return {
+            "pe": round(pe, 2) if pe and pe != np.inf else 999,
+            "pb": round(pb, 2) if pb and pb != np.inf else 999,
+            "market_cap": round(market_cap, 2)
+        }
     except Exception as e:
-        logger.error(f"❌ {symbol} 数据获取失败: {str(e)}")
+        logger.warning(f"❌ {symbol} 基本面获取失败: {str(e)[:30]}")
+        return {"pe": 999, "pb": 999, "market_cap": 0}
+
+def get_stock_data(symbol, name):
+    """获取单只股票的技术面+基本面数据"""
+    try:
+        # 1. 获取技术面数据
+        logger.info(f"📡 分析 {symbol} {name}...")
+        tk = yf.Ticker(symbol)
+        df = tk.history(period=f"{HIST_DAYS}d", timeout=10)
+        if len(df) < 30:
+            logger.warning(f"⚠️ {symbol} 技术数据不足")
+            return None
+        
+        # 2. 计算技术指标
+        tech_indicators = calc_technical_indicators(df)
+        
+        # 3. 获取基本面数据
+        fundamental = get_fundamental_data(symbol)
+        
+        # 4. 技术面评分（0-4分）
+        tech_conds = [
+            tech_indicators["rsi"] < 40,
+            tech_indicators["macd_gold"],
+            tech_indicators["j"] < 40,
+            tech_indicators["trend_up"]
+        ]
+        tech_score = sum(tech_conds)
+        
+        # 5. 基本面筛选
+        fund_filter_pass = (
+            fundamental["pe"] < FUNDAMENTAL_FILTER["pe_max"] and
+            fundamental["pb"] < FUNDAMENTAL_FILTER["pb_max"] and
+            fundamental["market_cap"] > FUNDAMENTAL_FILTER["market_cap_min"]
+        )
+        
+        # 6. 综合评分（技术分*0.7 + 基本面达标加1分）
+        total_score = tech_score * 0.7 + (1 if fund_filter_pass else 0)
+        
+        # 7. 买入信号（技术分≥3 + 基本面达标）
+        buy_signal = tech_score >= 3 and fund_filter_pass
+        
+        # 8. 条件单计算
+        buy_price = round(tech_indicators["price"] * 0.97, 2)
+        volume = int(SINGLE_MAX / buy_price // 100 * 100)
+        volume = max(volume, 100)
+        
+        return {
+            "symbol": symbol,
+            "code": symbol.replace(".SS", "").replace(".SZ", ""),
+            "name": name,
+            "tech": tech_indicators,
+            "fund": fundamental,
+            "tech_score": tech_score,
+            "fund_filter_pass": fund_filter_pass,
+            "total_score": round(total_score, 2),
+            "buy_signal": buy_signal,
+            "signal_text": "🔥 买入信号" if buy_signal else "⚠️ 观望",
+            "order": {
+                "buy_price": buy_price,
+                "volume": volume,
+                "profit10": round(buy_price * 1.1, 2),
+                "profit15": round(buy_price * 1.15, 2),
+                "stop_loss": round(tech_indicators["price"] * 0.94, 2)
+            }
+        }
+    except Exception as e:
+        logger.error(f"❌ {symbol} 数据获取失败: {str(e)[:30]}")
         return None
 
-# ======================== 量化买入策略 ========================
-def get_buy_signal(indicators):
-    conds = {
-        "RSI超跌": indicators["rsi"] < 40,
-        "MACD金叉": indicators["macd_gold"],
-        "KDJ低位": indicators["j"] < 40,
-        "趋势向上": indicators["trend_up"]
-    }
-    score = sum(conds.values())
-    reason = " + ".join([k for k, v in conds.items() if v]) or "无满足条件"
-    return {
-        "buy": score >= 3,
-        "score": score,
-        "reason": reason,
-        "signal_text": "🔥 买入信号" if score >= 3 else "⚠️ 观望"
-    }
+def scan_market():
+    """全市场扫描选股"""
+    all_stocks = {}
+    
+    # 1. 先处理自选股（优先保留）
+    logger.info("🔍 开始分析自选股...")
+    for symbol, name in MY_STOCKS.items():
+        data = get_stock_data(symbol, name)
+        if data:
+            all_stocks[symbol] = data
+        time.sleep(random.uniform(0.5, 1.0))  # 随机间隔防限流
+    
+    # 2. 全市场扫描（分批处理，避免超时）
+    logger.info("🔍 开始全市场扫描...")
+    scan_pool = list(MARKET_SCAN_POOL.items())
+    # 分批：每10只一批，间隔2秒
+    for i in range(0, len(scan_pool), 10):
+        batch = scan_pool[i:i+10]
+        for symbol, name in batch:
+            # 跳过已在自选股的股票
+            if symbol in all_stocks:
+                continue
+            data = get_stock_data(symbol, name)
+            if data:
+                all_stocks[symbol] = data
+            time.sleep(random.uniform(0.3, 0.8))
+        time.sleep(2)  # 批次间隔
+    
+    # 3. 筛选前N只综合评分最高的股票
+    sorted_stocks = sorted(
+        all_stocks.values(),
+        key=lambda x: (x["buy_signal"], x["total_score"]),
+        reverse=True
+    )[:SELECTION_TOP_N]
+    
+    return sorted_stocks
 
-# ======================== 条件单计算 ========================
-def calc_trade_order(price):
-    buy_price = round(price * 0.97, 2)
-    volume = int(SINGLE_MAX / buy_price // 100 * 100)
-    volume = max(volume, 100)
-    return {
-        "buy_price": buy_price,
-        "volume": volume,
-        "profit10": round(buy_price * 1.10, 2),
-        "profit15": round(buy_price * 1.15, 2),
-        "stop_loss": round(price * 0.94, 2)
-    }
-
-# ======================== 飞书推送 ========================
-def send_feishu_message(content):
+def send_feishu_report(stocks):
+    """生成并推送飞书报告"""
     if not FEISHU_WEBHOOK:
-        logger.error("❌ 飞书 Webhook 未配置")
-        return False
+        logger.error("❌ 飞书Webhook未配置")
+        return
+    
+    # 报告头部
+    report = f"""🚀 A股量化选股报告（基本面+技术面）
+📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}
+📊 筛选规则：技术面≥3分 + 基本面(PE<30/PB<5/市值>100亿)
+==================================================
+"""
+    
+    # 报告主体
+    for idx, stock in enumerate(stocks, 1):
+        report += f"""
+【{idx}】{stock['code']} {stock['name']} {stock['signal_text']}
+💯 综合评分：{stock['total_score']}（技术{stock['tech_score']}分+基本面{"1" if stock['fund_filter_pass'] else "0"}分）
+💵 现价：{stock['tech']['price']} 元
+
+📈 技术面指标：
+RSI：{stock['tech']['rsi']}   MACD金叉：{'是' if stock['tech']['macd_gold'] else '否'}
+KDJ：{stock['tech']['k']}/{stock['tech']['d']}/{stock['tech']['j']}
+MA5：{stock['tech']['ma5']}  MA20：{stock['tech']['ma20']}  趋势向上：{'是' if stock['tech']['trend_up'] else '否'}
+
+📊 基本面指标：
+市盈率(PE)：{stock['fund']['pe']}   市净率(PB)：{stock['fund']['pb']}
+市值：{stock['fund']['market_cap']} 亿元
+
+📋 条件单建议：
+买入 ≤ {stock['order']['buy_price']} 元，{stock['order']['volume']} 股
+止盈10%：{stock['order']['profit10']} 元 | 止盈15%：{stock['order']['profit15']} 元
+止损：{stock['order']['stop_loss']} 元
+--------------------------------------------------
+"""
+    
+    # 报告尾部
+    report += """
+⚠️ 风险提示：本报告仅为量化学习参考，不构成任何投资建议
+📌 选股逻辑：技术面抓超跌反弹，基本面剔除高风险股票
+"""
+    
+    # 推送飞书
     try:
         response = requests.post(
             FEISHU_WEBHOOK,
-            json={"msg_type": "text", "content": {"text": content}},
+            json={"msg_type": "text", "content": {"text": report}},
             timeout=10
         )
         response.raise_for_status()
-        logger.info("✅ 飞书消息推送成功")
-        return True
+        logger.info("✅ 飞书报告推送成功")
     except Exception as e:
         logger.error(f"❌ 飞书推送失败: {e}")
-        return False
 
 # ======================== 主程序 ========================
 def main():
-    logger.info("🚀 开始执行 yfinance 稳定版量化分析")
-    analysis_result = []
-
-    for symbol, name in STOCK_MAP.items():
-        indicators = get_stock_history(symbol)
-        if not indicators:
-            logger.warning(f"❌ {name} 数据获取失败，跳过")
-            continue
-        
-        signal = get_buy_signal(indicators)
-        order = calc_trade_order(indicators["price"])
-        
-        analysis_result.append({
-            "code": symbol.replace(".SS", "").replace(".SZ", ""),
-            "name": name,
-            **indicators,
-            **signal,
-            **order
-        })
-        time.sleep(0.5)  # 防限流
-
-    if not analysis_result:
-        send_feishu_message(f"⚠️ 【{datetime.now().strftime('%Y-%m-%d %H:%M')}】所有股票数据获取失败")
+    logger.info("🚀 启动全市场量化选股系统（yfinance稳定版）")
+    
+    # 1. 全市场扫描选股
+    selected_stocks = scan_market()
+    
+    # 2. 无符合条件股票处理
+    if not selected_stocks:
+        send_feishu_message(f"⚠️ 【{datetime.now().strftime('%Y-%m-%d %H:%M')}】暂无符合条件的股票")
+        logger.warning("❌ 无符合条件的股票")
         return
-
-    # 生成报告
-    report = f"""🚀 A股量化分析报告（yfinance 稳定版）
-📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}
-==================================================
-"""
-    for stock in analysis_result:
-        report += f"""
-【{stock['code']} {stock['name']}】 {stock['signal_text']}
-💵 现价：{stock['price']} 元 | 📊 策略得分：{stock['score']}/4
-✅ 满足条件：{stock['reason']}
-
-📈 核心指标：
-RSI：{stock['rsi']}   MACD金叉：{'是' if stock['macd_gold'] else '否'}
-KDJ：{stock['k']}/{stock['d']}/{stock['j']}
-MA5：{stock['ma5']}  MA20：{stock['ma20']}  趋势向上：{'是' if stock['trend_up'] else '否'}
-
-📋 条件单：
-买入 ≤ {stock['buy_price']} 元，{stock['volume']} 股
-止盈10%：{stock['profit10']} 元 | 止盈15%：{stock['profit15']} 元
-止损：{stock['stop_loss']} 元
---------------------------------------------------
-"""
-    report += "\n⚠️ 本报告仅为量化学习参考，不构成投资建议"
-    send_feishu_message(report)
-    logger.info("🎉 分析完成，报告已推送")
+    
+    # 3. 推送报告
+    send_feishu_report(selected_stocks)
+    logger.info("🎉 全市场选股完成，报告已推送")
 
 if __name__ == "__main__":
     main()
