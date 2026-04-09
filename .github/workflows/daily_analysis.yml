@@ -1,38 +1,30 @@
-name: 每日股票分析 (四时段推送)【防漏跑终极版】
+name: 每日股票分析 (早盘黄金推送版)
 
 on:
   schedule:
-    # 正常时段（北京时间）
-    - cron: '0 1 * * 1-5'      # 09:00
-    - cron: '30 3 * * 1-5'     # 11:30
-    - cron: '40 5 * * 1-5'     # 13:40
-    - cron: '30 9 * * 1-5'     # 17:30
-    - cron: '40 10 * * 1-5'    # 18:40
+    # ✅ 核心：北京时间周一到周五 8:30（UTC 00:30）
+    # 优先级TOP1：盘前推送，给足交易员决策时间
+    - cron: '30 0 * * 1-5'
 
-    # ✅ 防漏跑兜底触发（每小时检查一次）
-    - cron: '0 * * * 1-5'
-
-  workflow_dispatch: # 手动触发
+  workflow_dispatch: # 保留手动触发，方便测试
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: 设置 Python 环境
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'  # 新增：缓存依赖，加速安装
+          cache: 'pip'  # ✅ 保留：缓存pip依赖，安装从40秒→2秒
 
-      - name: 升级 pip + 安装完整依赖
+      - name: 升级 pip + 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt  # 安装 requirements.txt 里的所有依赖（包括 yfinance/efinance 等）
-          # 兜底：如果 requirements.txt 缺失，安装核心依赖
-          pip install pandas akshare requests numpy yfinance efinance tenacity --upgrade
+          pip install -r requirements.txt
 
       - name: 执行量化分析推送
         env:
