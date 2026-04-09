@@ -10,7 +10,6 @@ import numpy as np
 import yfinance as yf
 
 # ======================== 全局配置 ========================
-# 日志配置
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -18,7 +17,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 核心配置
 CONFIG_CONTENT = os.environ.get("CONFIG_CONTENT")
 if not CONFIG_CONTENT:
     raise Exception("❌ 未配置 CONFIG_CONTENT 环境变量")
@@ -27,72 +25,148 @@ try:
 except json.JSONDecodeError:
     raise Exception("❌ CONFIG_CONTENT 不是合法的 JSON 格式")
 
-# 飞书Webhook
 FEISHU_WEBHOOK = CONFIG.get("channels", {}).get("feishu", {}).get("webhook", {}).get("url", "")
 if not FEISHU_WEBHOOK:
     logger.warning("⚠️ 未配置飞书 Webhook，推送功能将失效")
 
-# 选股参数
-SELECTION_TOP_N = 5  # 最终推送N只股票
-HIST_DAYS = 90       # 技术面分析天数
-CAPITAL = 10000      # 本金
-SINGLE_MAX = 3000    # 单只股票最大持仓
-MAX_PRICE = 25       # ✅ 新增：股价上限 25 元
+SELECTION_TOP_N = 5
+HIST_DAYS = 90
+CAPITAL = 10000
+SINGLE_MAX = 3000
+MAX_PRICE = 25
 
-# 基本面筛选阈值（可根据需求调整）
 FUNDAMENTAL_FILTER = {
-    "pe_max": 30,    # 市盈率上限
-    "pb_max": 5,     # 市净率上限
-    "market_cap_min": 100  # 市值下限（亿）
+    "pe_max": 30,
+    "pb_max": 5,
+    "market_cap_min": 100
 }
 
-# 你原有自选股（优先保留）
 MY_STOCKS = {
     "000968.SZ": "蓝焰控股",
     "600028.SS": "中国石化",
     "600968.SS": "海油发展"
 }
 
-# 全市场扫描池（沪深300+中证500核心成分股，精简版）
+# ======================== ✅ 已替换：86 只安全股票池 ========================
 MARKET_SCAN_POOL = {
-    # 沪深300核心
-    "600000.SS": "浦发银行", "600016.SS": "民生银行", "600036.SS": "招商银行",
-    "601318.SS": "中国平安", "601689.SS": "拓普集团", "601899.SS": "紫金矿业",
-    "000858.SZ": "五粮液",   "000895.SZ": "双汇发展", "002594.SZ": "比亚迪",
-    "300750.SZ": "宁德时代", "600519.SS": "贵州茅台", "601012.SS": "隆基绿能",
-    # 中证500核心
-    "000725.SZ": "京东方A",  "002475.SZ": "立讯精密", "002304.SZ": "洋河股份",
-    "601898.SS": "中煤能源", "601989.SS": "中国重工", "600309.SS": "万华化学",
-    "002230.SZ": "科大讯飞", "002415.SZ": "海康威视", "600887.SS": "伊利股份",
-    "600438.SS": "通威股份", "000333.SZ": "美的集团", "601601.SS": "中国太保"
+    # 银行 20
+    "601398.SS": "工商银行",
+    "601939.SS": "建设银行",
+    "601288.SS": "农业银行",
+    "601988.SS": "中国银行",
+    "601328.SS": "交通银行",
+    "601166.SS": "兴业银行",
+    "600000.SS": "浦发银行",
+    "601998.SS": "中信银行",
+    "600016.SS": "民生银行",
+    "601818.SS": "光大银行",
+    "600919.SS": "江苏银行",
+    "601229.SS": "上海银行",
+    "601169.SS": "北京银行",
+    "601009.SS": "南京银行",
+    "600926.SS": "杭州银行",
+    "601838.SS": "成都银行",
+    "601577.SS": "长沙银行",
+    "601963.SS": "重庆银行",
+    "601997.SS": "贵阳银行",
+    "601665.SS": "齐鲁银行",
+
+    # 能源 20
+    "601088.SS": "中国神华",
+    "601225.SS": "陕西煤业",
+    "600028.SS": "中国石化",
+    "600900.SS": "长江电力",
+    "600011.SS": "华能国际",
+    "601898.SS": "中煤能源",
+    "600188.SS": "兖矿能源",
+    "601001.SS": "晋控煤业",
+    "600543.SS": "山煤国际",
+    "600508.SS": "上海能源",
+    "601918.SS": "新集能源",
+    "600968.SS": "海油发展",
+    "600583.SS": "海油工程",
+    "601808.SS": "中海油服",
+    "600027.SS": "华电国际",
+    "601991.SS": "大唐发电",
+    "600023.SS": "浙能电力",
+    "600642.SS": "申能股份",
+    "000883.SZ": "湖北能源",
+    "601868.SS": "中国能建",
+
+    # 医药 14
+    "000538.SZ": "云南白药",
+    "600332.SS": "白云山",
+    "000999.SZ": "华润三九",
+    "600566.SS": "济川药业",
+    "600535.SS": "天士力",
+    "000623.SZ": "吉林敖东",
+    "000028.SZ": "国药一致",
+    "600062.SS": "华润双鹤",
+    "600329.SS": "中新药业",
+    "600129.SS": "太极集团",
+    "600557.SS": "康缘药业",
+    "002737.SZ": "葵花药业",
+    "300026.SZ": "红日药业",
+    "000078.SZ": "海王生物",
+
+    # 科技 17
+    "000100.SZ": "TCL科技",
+    "002236.SZ": "大华股份",
+    "002027.SZ": "分众传媒",
+    "002555.SZ": "三七互娱",
+    "002056.SZ": "横店东磁",
+    "000997.SZ": "新大陆",
+    "002465.SZ": "海格通信",
+    "002544.SZ": "杰赛科技",
+    "600562.SS": "国睿科技",
+    "600990.SS": "四创电子",
+    "600271.SS": "航天信息",
+    "002153.SZ": "石基信息",
+    "002152.SZ": "广电运通",
+    "600570.SS": "恒生电子",
+    "603019.SS": "中科曙光",
+    "000066.SZ": "中国长城",
+    "000977.SZ": "浪潮信息",
+
+    # 航天军工 15
+    "600372.SS": "中航电子",
+    "002013.SZ": "中航机电",
+    "600765.SS": "中航重机",
+    "000768.SZ": "中航西飞",
+    "600038.SS": "中直股份",
+    "600967.SS": "内蒙一机",
+    "600435.SS": "北方导航",
+    "600184.SS": "光电股份",
+    "600262.SS": "北方股份",
+    "600480.SS": "凌云股份",
+    "600499.SS": "晋西车轴",
+    "300719.SZ": "安达维尔",
+    "688586.SS": "江航装备",
+    "688636.SS": "智明达",
+    "002382.SZ": "蓝帆医疗"
 }
 
 # ======================== 核心工具函数 ========================
 def calc_technical_indicators(df):
-    """计算技术面指标（RSI/MACD/KDJ/均线）"""
     df = df.copy().sort_index()
     close = df["Close"].astype(float)
     high = df["High"].astype(float)
     low = df["Low"].astype(float)
 
-    # 均线
     ma5 = close.rolling(5, min_periods=1).mean()
     ma20 = close.rolling(20, min_periods=1).mean()
 
-    # RSI(14)
     delta = close.diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta).clip(lower=0).rolling(14).mean()
     rs = gain / loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
 
-    # MACD
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd_line = ema12 - ema26
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
 
-    # KDJ(9)
     low9 = low.rolling(9).min()
     high9 = high.rolling(9).max()
     tr = high9 - low9
@@ -118,17 +192,12 @@ def calc_technical_indicators(df):
     }
 
 def get_fundamental_data(symbol):
-    """获取基本面数据（PE/PB/市值）"""
     try:
         tk = yf.Ticker(symbol)
         info = tk.info
-        
-        # 提取核心基本面指标
-        pe = info.get("trailingPE", 999)  # 市盈率
-        pb = info.get("priceToBook", 999) # 市净率
-        # 市值（转成亿）
+        pe = info.get("trailingPE", 999)
+        pb = info.get("priceToBook", 999)
         market_cap = info.get("marketCap", 0) / 1e8 if info.get("marketCap") else 0
-        
         return {
             "pe": round(pe, 2) if pe and pe != np.inf else 999,
             "pb": round(pb, 2) if pb and pb != np.inf else 999,
@@ -139,9 +208,7 @@ def get_fundamental_data(symbol):
         return {"pe": 999, "pb": 999, "market_cap": 0}
 
 def get_stock_data(symbol, name):
-    """获取单只股票的技术面+基本面数据"""
     try:
-        # 1. 获取技术面数据
         logger.info(f"📡 分析 {symbol} {name}...")
         tk = yf.Ticker(symbol)
         df = tk.history(period=f"{HIST_DAYS}d", timeout=10)
@@ -149,19 +216,13 @@ def get_stock_data(symbol, name):
             logger.warning(f"⚠️ {symbol} 技术数据不足")
             return None
         
-        # 2. 计算技术指标
         tech_indicators = calc_technical_indicators(df)
-
-        # ✅ 核心：股价超过25元直接跳过
         current_price = tech_indicators["price"]
         if current_price > MAX_PRICE:
-            logger.info(f"❌ {symbol} {name} 股价 {current_price} 元 > {MAX_PRICE} 元，已过滤")
+            logger.info(f"❌ {symbol} {name} 股价超过 {MAX_PRICE} 元，已过滤")
             return None
         
-        # 3. 获取基本面数据
         fundamental = get_fundamental_data(symbol)
-        
-        # 4. 技术面评分（0-4分）
         tech_conds = [
             tech_indicators["rsi"] < 40,
             tech_indicators["macd_gold"],
@@ -169,25 +230,18 @@ def get_stock_data(symbol, name):
             tech_indicators["trend_up"]
         ]
         tech_score = sum(tech_conds)
-        
-        # 5. 基本面筛选
         fund_filter_pass = (
             fundamental["pe"] < FUNDAMENTAL_FILTER["pe_max"] and
             fundamental["pb"] < FUNDAMENTAL_FILTER["pb_max"] and
             fundamental["market_cap"] > FUNDAMENTAL_FILTER["market_cap_min"]
         )
-        
-        # 6. 综合评分（技术分*0.7 + 基本面达标加1分）
         total_score = tech_score * 0.7 + (1 if fund_filter_pass else 0)
-        
-        # 7. 买入信号（技术分≥3 + 基本面达标）
         buy_signal = tech_score >= 3 and fund_filter_pass
-        
-        # 8. 条件单计算
-        buy_price = round(tech_indicators["price"] * 0.97, 2)
+
+        buy_price = round(current_price * 0.97, 2)
         volume = int(SINGLE_MAX / buy_price // 100 * 100)
         volume = max(volume, 100)
-        
+
         return {
             "symbol": symbol,
             "code": symbol.replace(".SS", "").replace(".SZ", ""),
@@ -204,7 +258,7 @@ def get_stock_data(symbol, name):
                 "volume": volume,
                 "profit10": round(buy_price * 1.1, 2),
                 "profit15": round(buy_price * 1.15, 2),
-                "stop_loss": round(tech_indicators["price"] * 0.94, 2)
+                "stop_loss": round(current_price * 0.94, 2)
             }
         }
     except Exception as e:
@@ -212,56 +266,44 @@ def get_stock_data(symbol, name):
         return None
 
 def scan_market():
-    """全市场扫描选股"""
     all_stocks = {}
-    
-    # 1. 先处理自选股（优先保留）
     logger.info("🔍 开始分析自选股...")
     for symbol, name in MY_STOCKS.items():
         data = get_stock_data(symbol, name)
         if data:
             all_stocks[symbol] = data
-        time.sleep(random.uniform(0.5, 1.0))  # 随机间隔防限流
+        time.sleep(random.uniform(0.5, 1.0))
     
-    # 2. 全市场扫描（分批处理，避免超时）
-    logger.info("🔍 开始全市场扫描...")
+    logger.info("🔍 开始扫描 86 只安全股票池...")
     scan_pool = list(MARKET_SCAN_POOL.items())
-    # 分批：每10只一批，间隔2秒
     for i in range(0, len(scan_pool), 10):
         batch = scan_pool[i:i+10]
         for symbol, name in batch:
-            # 跳过已在自选股的股票
             if symbol in all_stocks:
                 continue
             data = get_stock_data(symbol, name)
             if data:
                 all_stocks[symbol] = data
             time.sleep(random.uniform(0.3, 0.8))
-        time.sleep(2)  # 批次间隔
+        time.sleep(2)
     
-    # 3. 筛选前N只综合评分最高的股票
     sorted_stocks = sorted(
         all_stocks.values(),
         key=lambda x: (x["buy_signal"], x["total_score"]),
         reverse=True
     )[:SELECTION_TOP_N]
-    
     return sorted_stocks
 
 def send_feishu_report(stocks):
-    """生成并推送飞书报告"""
     if not FEISHU_WEBHOOK:
         logger.error("❌ 飞书Webhook未配置")
         return
     
-    # 报告头部
     report = f"""🚀 A股量化选股报告（基本面+技术面）
 📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}
 📊 筛选规则：股价≤25元 + 技术面≥3分 + 基本面(PE<30/PB<5/市值>100亿)
 ==================================================
 """
-    
-    # 报告主体
     for idx, stock in enumerate(stocks, 1):
         report += f"""
 【{idx}】{stock['code']} {stock['name']} {stock['signal_text']}
@@ -283,54 +325,34 @@ MA5：{stock['tech']['ma5']}  MA20：{stock['tech']['ma20']}  趋势向上：{'�
 止损：{stock['order']['stop_loss']} 元
 --------------------------------------------------
 """
-    
-    # 报告尾部
     report += """
 ⚠️ 风险提示：本报告仅为量化学习参考，不构成任何投资建议
 📌 选股逻辑：技术面抓超跌反弹，基本面剔除高风险股票
 """
-    
-    # 推送飞书
     try:
-        response = requests.post(
-            FEISHU_WEBHOOK,
-            json={"msg_type": "text", "content": {"text": report}},
-            timeout=10
-        )
-        response.raise_for_status()
+        requests.post(FEISHU_WEBHOOK, json={"msg_type": "text", "content": {"text": report}}, timeout=10)
         logger.info("✅ 飞书报告推送成功")
     except Exception as e:
         logger.error(f"❌ 飞书推送失败: {e}")
 
 def send_feishu_message(content):
-    """单独发送飞书消息"""
     if not FEISHU_WEBHOOK:
         return
     try:
-        requests.post(
-            FEISHU_WEBHOOK,
-            json={"msg_type": "text", "content": {"text": content}},
-            timeout=5
-        )
+        requests.post(FEISHU_WEBHOOK, json={"msg_type": "text", "content": {"text": content}}, timeout=5)
     except:
         pass
 
 # ======================== 主程序 ========================
 def main():
-    logger.info("🚀 启动全市场量化选股系统（yfinance稳定版）")
-    
-    # 1. 全市场扫描选股
+    logger.info("🚀 启动 86 只安全股票池量化扫描")
     selected_stocks = scan_market()
-    
-    # 2. 无符合条件股票处理
     if not selected_stocks:
-        send_feishu_message(f"⚠️ 【{datetime.now().strftime('%Y-%m-%d %H:%M')}】暂无符合条件的股票（股价≤25元）")
-        logger.warning("❌ 无符合条件的股票")
+        send_feishu_message(f"⚠️ 【{datetime.now().strftime('%Y-%m-%d %H:%M')}】暂无符合条件股票")
+        logger.warning("❌ 无符合条件股票")
         return
-    
-    # 3. 推送报告
     send_feishu_report(selected_stocks)
-    logger.info("🎉 全市场选股完成，报告已推送")
+    logger.info("🎉 扫描完成，已推送最优 5 只")
 
 if __name__ == "__main__":
     main()
