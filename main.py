@@ -146,6 +146,35 @@ MARKET_SCAN_POOL = {
     "002382.SZ": "蓝帆医疗"
 }
 
+# ======================== ✅ 新增：A股交易日校验（避免节假日白跑） ========================
+def is_trading_day():
+    """
+    判断今天是否为A股交易日
+    逻辑：
+    1. 周一到周五
+    2. 不在法定节假日列表里（每年更新一次即可）
+    """
+    today = datetime.now()
+    # 1. 先判断周几：周一(0)到周五(4)
+    if today.weekday() > 4:
+        logger.info("❌ 今天是周末，休市，直接退出")
+        return False
+    
+    # 2. 法定节假日列表（2026年示例，每年更新一次）
+    holidays_2026 = [
+        "2026-01-01", "2026-01-28", "2026-01-29", "2026-01-30", "2026-01-31",
+        "2026-02-01", "2026-02-02", "2026-04-04", "2026-05-01", "2026-05-28",
+        "2026-05-29", "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04",
+        "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08"
+    ]
+    today_str = today.strftime("%Y-%m-%d")
+    if today_str in holidays_2026:
+        logger.info(f"❌ 今天是法定节假日 {today_str}，休市，直接退出")
+        return False
+    
+    logger.info("✅ 今天是A股交易日，继续执行")
+    return True
+
 # ======================== 【优化后】核心工具函数 ========================
 def calc_technical_indicators(df):
     """计算技术面指标（修复逻辑+新增量能+放宽金叉）"""
@@ -308,6 +337,7 @@ def get_stock_data(symbol, name):
             "fund": fundamental,
             "tech_score": tech_score,
             "fund_filter_pass": fund_filter_pass,
+            "fund_score": fund_score,  # 新增：用于报告显示
             "total_score": total_score,
             "buy_signal": buy_signal,
             "signal_text": "🔥 买入信号" if buy_signal else "⚠️ 观望",
@@ -360,13 +390,17 @@ def send_feishu_report(stocks):
     report = f"""🚀 A股量化选股报告（优化版）
 📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}
 📊 筛选规则：股价≤25元 + 技术面≥3分 + 基本面(PE<30/PB<5/市值>100亿)
-✨ 优化亮点：放宽金叉+新增量能+修复逻辑互斥
+✨ 优化亮点：放宽金叉+新增量能+修复逻辑互斥+交易日校验
 ==================================================
 """
     for idx, stock in enumerate(stocks, 1):
+        # ✅ 修复：显示清晰的基本面分数，不再是True/False
+        fund_display = stock.get("fund_score", 1 if stock["fund_filter_pass"] else 0)
+        money_display = 2 if stock['tech']['volume_enlarge'] else 0
+        
         report += f"""
 【{idx}】{stock['code']} {stock['name']} {stock['signal_text']}
-💯 综合评分：{stock['total_score']}（技术{stock['tech_score']}分+基本面{stock['fund_filter_pass']}分+资金{2 if stock['tech']['volume_enlarge'] else 0}分）
+💯 综合评分：{stock['total_score']}（技术{stock['tech_score']}分+基本面{fund_display}分+资金{money_display}分）
 💵 现价：{stock['tech']['price']} 元
 
 📈 技术面指标：
@@ -405,6 +439,10 @@ def send_feishu_message(content):
 
 # ======================== 主程序 ========================
 def main():
+    # ✅ 新增：先校验交易日，不是交易日直接退出
+    if not is_trading_day():
+        return
+    
     logger.info("🚀 启动 86 只安全股票池量化扫描（优化版）")
     selected_stocks = scan_market()
     if not selected_stocks:
