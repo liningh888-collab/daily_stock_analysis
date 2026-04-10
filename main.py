@@ -111,14 +111,14 @@ def is_trading_day():
     return True
 
 def get_market_status():
-    """大盘安全开关：判断沪深300趋势，决定是否开仓"""
+    """大盘安全开关：下跌趋势也允许开仓（已修改）"""
     try:
         # 沪深300指数
         hs300 = yf.Ticker("000300.SS")
         df = hs300.history(period="60d", timeout=10)
         if len(df) < 30:
-            logger.warning("⚠️ 沪深300数据获取失败，默认关闭开仓权限")
-            return False, "大盘数据获取失败，观望"
+            logger.warning("⚠️ 沪深300数据获取失败，默认开启开仓权限")
+            return True, "大盘数据获取失败，谨慎开仓"
         
         close = df["Close"].astype(float)
         ma20 = close.rolling(20, min_periods=1).mean()
@@ -126,7 +126,7 @@ def get_market_status():
         ma20_current = ma20.iloc[-1]
         ma20_prev = ma20.iloc[-2]
 
-        # 判断大盘趋势
+        # 👇👇👇 关键修改：无论趋势如何，都允许开仓
         if current_price > ma20_current and ma20_current > ma20_prev:
             logger.info("✅ 大盘处于上升趋势，开放开仓权限")
             return True, "上升市，总仓位上限80%"
@@ -134,11 +134,11 @@ def get_market_status():
             logger.info("⚠️ 大盘处于震荡趋势，限制开仓权限")
             return True, "震荡市，总仓位上限50%"
         else:
-            logger.info("❌ 大盘处于下跌趋势，关闭开仓权限")
-            return False, "下跌市，禁止开仓，建议空仓观望"
+            logger.info("⚠️ 大盘处于下跌趋势，允许谨慎开仓（已修改）")
+            return True, "下跌市，谨慎开仓，严控仓位与止损"
     except Exception as e:
         logger.error(f"❌ 大盘状态获取失败: {str(e)}")
-        return False, "大盘状态异常，观望"
+        return True, "大盘状态异常，谨慎开仓"
 
 def calc_atr(df, period=14):
     """计算ATR平均真实波幅，用于动态止损止盈"""
