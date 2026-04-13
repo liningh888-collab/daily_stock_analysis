@@ -29,49 +29,65 @@ FEISHU_WEBHOOK = CONFIG.get("channels", {}).get("feishu", {}).get("webhook", {})
 if not FEISHU_WEBHOOK:
     logger.warning("⚠️ 未配置飞书 Webhook，推送功能将失效")
 
-# ======================== 【大师级核心参数】 ========================
-# 经过回测的最优参数，不要乱改
-SELECTION_TOP_N = 3          # 每天最多推3只，宁缺毋滥
-HIST_DAYS = 90               # 技术分析周期缩短到90天，更灵敏
-CAPITAL = 10000              # 总本金
-MAX_PRICE = 30               # 股价上限提高到30元，增加可选标的
-TRADING_COST_RATE = 0.0015   # A股总交易成本
-MIN_PROFIT_COVER = 0.01      # 保本线
-WIN_LOSS_RATIO_MIN = 2.3     # 盈亏比最低2.3:1（回测最优值）
-SINGLE_MAX_RISK = 250        # 单只最大亏损降到250元，极致控亏
+# ======================== 【调整：弱市友好参数】 ========================
+SELECTION_TOP_N = 3
+HIST_DAYS = 90
+CAPITAL = 10000
+MAX_PRICE = 30
+TRADING_COST_RATE = 0.0015
+MIN_PROFIT_COVER = 0.01
+WIN_LOSS_RATIO_MIN = 2.0     # 盈亏比降到2.0
+SINGLE_MAX_RISK = 250
 
-# 基本面红线（经过回测的安全值）
+# 基本面红线（适度放宽）
 FUNDAMENTAL_RED_LINE = {
-    "core_pe_max": 20,
-    "steady_pe_max": 32,
-    "satellite_pe_max": 40,
-    "pb_max": 5,
-    "market_cap_min": 60,
-    "turnover_min": 0.3,     # 最低换手率0.3%，避免死股
-    "turnover_max": 15       # 最高换手率15%，避免妖股
+    "core_pe_max": 22,
+    "steady_pe_max": 35,
+    "satellite_pe_max": 45,
+    "pb_max": 5.5,
+    "market_cap_min": 50,
+    "turnover_min": 0.2,
+    "turnover_max": 20       # 换手率上限提高到20%
 }
 
-# ======================== 【优化股票池】 ========================
-# 去掉长期走弱、波动太小的标的，保留真正有赚钱效应的
+# ======================== 【大幅扩容：30元以下优质股】 ========================
+# 核心防御池（新增10只：基建+铁路+能源，低估值高分红）
 CORE_POOL = {
     "601398.SS": "工商银行", "601939.SS": "建设银行", "601288.SS": "农业银行",
-    "601166.SS": "兴业银行", "600919.SS": "江苏银行", "601838.SS": "成都银行",
-    "601088.SS": "中国神华", "601225.SS": "陕西煤业", "600028.SS": "中国石化",
-    "600900.SS": "长江电力", "600023.SS": "浙能电力"
+    "601328.SS": "交通银行", "601166.SS": "兴业银行", "600919.SS": "江苏银行",
+    "601838.SS": "成都银行", "601088.SS": "中国神华", "601225.SS": "陕西煤业",
+    "600028.SS": "中国石化", "600900.SS": "长江电力", "600023.SS": "浙能电力",
+    # 新增
+    "601006.SS": "大秦铁路", "601668.SS": "中国建筑", "601390.SS": "中国中铁",
+    "601186.SS": "中国铁建", "601868.SS": "中国能建", "601898.SS": "中煤能源",
+    "600188.SS": "兖矿能源", "601001.SS": "晋控煤业", "600642.SS": "申能股份",
+    "600015.SS": "华夏银行"
 }
 
+# 稳健成长池（新增12只：医药+消费+公用事业）
 STEADY_POOL = {
     "000538.SZ": "云南白药", "600332.SS": "白云山", "000999.SZ": "华润三九",
     "600566.SS": "济川药业", "000623.SZ": "吉林敖东", "000028.SZ": "国药一致",
     "002236.SZ": "大华股份", "002027.SZ": "分众传媒", "002555.SZ": "三七互娱",
-    "002152.SZ": "广电运通"
+    "002152.SZ": "广电运通",
+    # 新增
+    "600867.SS": "通化东宝", "002004.SZ": "华邦健康", "000650.SZ": "仁和药业",
+    "300498.SZ": "温氏股份", "300705.SZ": "九典制药", "600572.SS": "康恩贝",
+    "000989.SZ": "九芝堂", "600252.SS": "中恒集团", "300026.SZ": "红日药业",
+    "600222.SS": "太龙药业", "002183.SZ": "怡亚通", "600420.SS": "现代制药"
 }
 
+# 弹性卫星池（新增10只：军工+科技+资源）
 SATELLITE_POOL = {
     "000100.SZ": "TCL科技", "002056.SZ": "横店东磁", "000997.SZ": "新大陆",
     "002465.SZ": "海格通信", "600562.SS": "国睿科技", "600570.SS": "恒生电子",
     "603019.SS": "中科曙光", "000977.SZ": "浪潮信息", "600372.SS": "中航电子",
-    "002382.SZ": "蓝帆医疗"
+    "002382.SZ": "蓝帆医疗",
+    # 新增
+    "600879.SS": "航天电子", "002413.SZ": "雷科防务", "002297.SZ": "博云新材",
+    "600435.SS": "北方导航", "600150.SS": "中国重工", "300008.SZ": "天海防务",
+    "600967.SS": "内蒙一机", "600279.SS": "重庆港", "601106.SS": "中国一重",
+    "601388.SS": "怡球资源"
 }
 
 MY_STOCKS = {
@@ -99,7 +115,6 @@ def is_trading_day():
     return True
 
 def get_market_status():
-    """【大师级大盘判断】不仅看趋势，还看波动率"""
     try:
         hs300 = yf.Ticker("000300.SS")
         df = hs300.history(period="60d", timeout=10)
@@ -110,7 +125,6 @@ def get_market_status():
         ma20 = close.rolling(20, min_periods=1).mean()
         current = close.iloc[-1]
         
-        # 计算大盘波动率
         daily_return = close.pct_change().dropna()
         volatility = daily_return.std() * np.sqrt(252)
         
@@ -139,7 +153,6 @@ def calc_atr(df, period=14):
     return round(atr.iloc[-1], 2)
 
 def calc_technical_indicators(df):
-    """【大师级技术指标】修复了原来的bug，加入了更多有效指标"""
     df = df.copy().sort_index()
     close = df["Close"].astype(float)
     high = df["High"].astype(float)
@@ -153,7 +166,7 @@ def calc_technical_indicators(df):
     ma60 = close.rolling(60, min_periods=1).mean()
     ma5_vol = volume.rolling(5, min_periods=1).mean()
 
-    # RSI(14)
+    # RSI
     delta = close.diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(lower=0)).rolling(14).mean()
@@ -167,7 +180,7 @@ def calc_technical_indicators(df):
     macd_line = ema12 - ema26
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
 
-    # KDJ(9)
+    # KDJ
     low9 = low.rolling(9).min()
     high9 = high.rolling(9).max()
     tr = high9 - low9
@@ -176,7 +189,7 @@ def calc_technical_indicators(df):
     k = rsv.ewm(span=3, adjust=False).mean()
     d = k.ewm(span=3, adjust=False).mean()
 
-    # 金叉判断（近2天内）
+    # 金叉判断
     macd_gold = False
     for i in range(2):
         if len(macd_line) < i+2: break
@@ -189,20 +202,14 @@ def calc_technical_indicators(df):
         if k.iloc[-1-i] > d.iloc[-1-i] and k.iloc[-2-i] <= d.iloc[-2-i]:
             kdj_gold = True
 
-    # 量能判断
-    volume_enlarge = bool(volume.iloc[-3:].max() >= ma5_vol.iloc[-1] * 1.3)
-    volume_shrink = bool(volume.iloc[-1] <= ma5_vol.iloc[-1] * 0.7)
+    volume_enlarge = bool(volume.iloc[-3:].max() >= ma5_vol.iloc[-1] * 1.2)
+    volume_ratio = round(volume.iloc[-1] / ma5_vol.iloc[-1], 2) if ma5_vol.iloc[-1] > 0 else 1.0
 
-    # 【核心】当日强弱判断（这是解决"一买就跌"的关键）
+    # 【调整：当日强弱放宽到-0.8%~3.5%】
     current_price = close.iloc[-1]
     open_price = open_.iloc[-1]
     day_change = (current_price - open_price) / open_price
-    
-    # 只买当天已经走强但没追高的股票
-    is_intraday_strong = 0.002 <= day_change <= 0.035
-    
-    # 计算量比
-    volume_ratio = round(volume.iloc[-1] / ma5_vol.iloc[-1], 2) if ma5_vol.iloc[-1] > 0 else 1.0
+    is_intraday_strong = -0.008 <= day_change <= 0.035
 
     return {
         "price": round(current_price, 2),
@@ -224,7 +231,6 @@ def calc_technical_indicators(df):
     }
 
 def get_fundamental_data(symbol, pool_type):
-    """【大师级基本面】加入了换手率过滤，避免死股和妖股"""
     try:
         tk = yf.Ticker(symbol)
         info = tk.info
@@ -256,7 +262,7 @@ def get_fundamental_data(symbol, pool_type):
     except:
         return {"pe":999,"pb":999,"market_cap":0,"turnover":0,"fund_pass":False}
 
-# ======================== 【大师级核心分析】 ========================
+# ======================== 核心分析 ========================
 def get_stock_data(symbol, name, pool_type, market_position_ratio):
     try:
         logger.info(f"📡 分析 {symbol} {name}")
@@ -269,90 +275,71 @@ def get_stock_data(symbol, name, pool_type, market_position_ratio):
         current_price = tech["price"]
         atr = tech["atr"]
 
-        # 1. 基础过滤
         if current_price > MAX_PRICE:
             return None
 
-        # 2. 【核心】当日走弱直接过滤（90%的亏损都来自这里）
-        if not tech["is_intraday_strong"]:
-            logger.info(f"❌ {symbol} 当日走弱（涨幅{tech['day_change']}%），过滤")
-            return None
-
-        # 3. 量比过滤（没有量的上涨都是耍流氓）
-        if tech["volume_ratio"] < 1.1:
+        # 【调整：量比要求降到0.85】
+        if tech["volume_ratio"] < 0.85:
             logger.info(f"❌ {symbol} 量比不足{tech['volume_ratio']}，过滤")
             return None
 
-        # 4. 基本面过滤
         fundamental = get_fundamental_data(symbol, pool_type)
         if not fundamental["fund_pass"]:
             return None
 
-        # 5. 【大师级择时】
-        # 必选条件：趋势向上 + 放量
+        # 【调整：辅助条件4选1即可】
         core_conds = [tech["trend_up"], tech["volume_enlarge"]]
         core_pass = all(core_conds)
-        
-        # 辅助条件：4选2（提高胜率）
         assist_conds = [
             tech["macd_gold"], 
             tech["kdj_gold"], 
-            35 < tech["rsi"] < 65, 
+            30 < tech["rsi"] < 70, 
             tech["ma5"] > tech["ma10"]
         ]
-        assist_pass = sum(assist_conds) >= 2
-        
+        assist_pass = sum(assist_conds) >= 1
         timing_pass = core_pass and assist_pass
 
         if not timing_pass:
             return None
 
-        # 6. 【大师级买卖点】经过回测的最优值
-        # 买入价：前低*0.998 或 现价*0.992，取低的那个
+        # 买卖点
         buy_price = min(round(tech["prev_low"] * 0.998, 2), round(current_price * 0.992, 2))
-        buy_price = max(buy_price, current_price * 0.97)  # 最多跌3%买入
+        buy_price = max(buy_price, current_price * 0.97)
 
-        # 止损：ATR*1.8，且不小于2.5%，不大于4.5%
         stop_loss = round(buy_price - atr * 1.8, 2)
-        stop_loss_min = round(buy_price * 0.975, 2)  # 最小止损2.5%
-        stop_loss_max = round(buy_price * 0.955, 2)  # 最大止损4.5%
+        stop_loss_min = round(buy_price * 0.975, 2)
+        stop_loss_max = round(buy_price * 0.955, 2)
         stop_loss = max(min(stop_loss, stop_loss_max), stop_loss_min)
 
-        # 止盈：ATR*4.2，且不小于6%，不大于15%
         target_profit = round(buy_price + atr * 4.2, 2)
-        target_profit_min = round(buy_price * 1.06, 2)  # 最小止盈6%
-        target_profit_max = round(buy_price * 1.15, 2)  # 最大止盈15%
+        target_profit_min = round(buy_price * 1.06, 2)
+        target_profit_max = round(buy_price * 1.15, 2)
         target_profit = min(max(target_profit, target_profit_min), target_profit_max)
 
-        # 计算真实盈亏比（修复了原来的bug）
         profit_space = (target_profit - buy_price) / buy_price
         loss_space = (buy_price - stop_loss) / buy_price
         win_loss_ratio = round(profit_space / loss_space, 2) if loss_space > 0 else 0
 
-        # 盈亏比硬门槛
         if win_loss_ratio < WIN_LOSS_RATIO_MIN:
-            logger.info(f"❌ {symbol} 盈亏比{win_loss_ratio}<2.3，过滤")
+            logger.info(f"❌ {symbol} 盈亏比{win_loss_ratio}<2.0，过滤")
             return None
 
-        # 7. 【动态仓位计算】根据大盘强弱调整
+        # 动态仓位
         max_shares_by_risk = int(SINGLE_MAX_RISK / (loss_space * buy_price) // 100 * 100)
-        
-        # 不同池子的仓位上限
         pool_max = {
             "core": 0.25 * market_position_ratio,
             "steady": 0.18 * market_position_ratio,
             "satellite": 0.12 * market_position_ratio
         }.get(pool_type, 0.1)
-        
         max_shares_by_pool = int(CAPITAL * pool_max / buy_price // 100 * 100)
         volume = min(max_shares_by_risk, max_shares_by_pool)
         volume = max(volume, 100)
 
-        # 8. 阶梯止盈（大师级卖出策略）
+        # 阶梯止盈
         profit_cover_cost = round(buy_price * (1 + TRADING_COST_RATE + MIN_PROFIT_COVER), 2)
         profit_mid = round(buy_price + (target_profit - buy_price) * 0.6, 2)
 
-        # 9. 综合评分（更科学的权重）
+        # 综合评分
         pool_weight = {"core":1.5, "steady":1.2, "satellite":1.0}[pool_type]
         total_score = round(
             (sum(core_conds)*2.5 + sum(assist_conds)*1.2) * 0.45
@@ -398,11 +385,10 @@ def scan_market(market_position_ratio):
             all_stocks[symbol] = data
         time.sleep(random.uniform(0.2, 0.4))
 
-    # 按综合评分排序，取前N只
     sorted_stocks = sorted(all_stocks.values(), key=lambda x: x["total_score"], reverse=True)[:SELECTION_TOP_N]
     return sorted_stocks
 
-# ======================== 【大师级飞书推送】 ========================
+# ======================== 飞书推送 ========================
 def send_feishu_report(stocks, market_tips, market_position_ratio):
     if not FEISHU_WEBHOOK:
         logger.error("❌ 未配置飞书Webhook")
@@ -414,7 +400,7 @@ def send_feishu_report(stocks, market_tips, market_position_ratio):
 📅 {now}
 📊 今日大盘状态：{market_tips}
 ==================================================
-⚠️ 今日无符合【高胜率+盈亏比≥2.3:1】的开仓机会
+⚠️ 今日无符合【高胜率+盈亏比≥2:1】的开仓机会
 📌 策略建议：空仓观望，等待确定性机会
 ==================================================
 ⚠️ 风险提示：本报告仅为量化学习参考，不构成任何投资建议
@@ -448,9 +434,9 @@ RSI：{s['tech']['rsi']} | MA5>MA10：{'是' if s['tech']['ma5']>s['tech']['ma10
 📦 建议仓位：{o['volume']} 股（单只最大亏损≤{SINGLE_MAX_RISK}元）
 🛑 止损价：≥ {o['stop_loss']} 元（幅度{o['stop_loss_pct']}%，跌破无条件止损）
 💰 阶梯止盈计划：
-   1. 保本线：{o['profit_cover_cost']} 元（止损上移到买入价，绝对不亏本金）
+   1. 保本线：{o['profit_cover_cost']} 元（止损上移到买入价）
    2. 锁定线：{o['profit_mid']} 元（卖出一半，止损上移到保本线）
-   3. 目标线：{o['target_profit']} 元（全部清仓，落袋为安）
+   3. 目标线：{o['target_profit']} 元（全部清仓）
 --------------------------------------------------
 """
         msg += f"""
@@ -459,7 +445,6 @@ RSI：{s['tech']['rsi']} | MA5>MA10：{'是' if s['tech']['ma5']>s['tech']['ma10
 1. 总仓位不超过{int(market_position_ratio*100)}%，单只不超过建议仓位
 2. 到止损价无条件卖出，绝不扛单
 3. 涨到保本线后，立刻上移止损，绝对不亏本金
-4. 不要在开盘15分钟内和收盘前10分钟交易
 """
 
     try:
