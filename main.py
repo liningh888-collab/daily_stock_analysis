@@ -29,26 +29,25 @@ FEISHU_WEBHOOK = CONFIG.get("channels", {}).get("feishu", {}).get("webhook", {})
 if not FEISHU_WEBHOOK:
     logger.warning("⚠️ 未配置飞书 Webhook，推送功能将失效")
 
-# ======================== 【优化1：提高推送数量】 ========================
-SELECTION_TOP_N = 6          # 单日最多推6只（原来2只）
+# ======================== 策略核心参数（放宽，多推股票） ========================
+SELECTION_TOP_N = 5          # 最多推5只
 HIST_DAYS = 120
 CAPITAL = 10000
 MAX_PRICE = 25
 TRADING_COST_RATE = 0.0015
 MIN_PROFIT_COVER = 0.01
-WIN_LOSS_RATIO_MIN = 2.0     # 盈亏比降到2.0（更容易选出）
+WIN_LOSS_RATIO_MIN = 2.0     # 盈亏比门槛降低
 SINGLE_MAX_RISK = 300
 
-# 基本面筛选（放宽一点）
 FUNDAMENTAL_RED_LINE = {
-    "core_pe_max": 18,       # 核心PE从15→18
-    "steady_pe_max": 28,     # 稳健从25→28
+    "core_pe_max": 18,
+    "steady_pe_max": 28,
     "satellite_pe_max": 35,
-    "pb_max": 4.5,           # PB从4→4.5
-    "market_cap_min": 80     # 市值从100→80亿
+    "pb_max": 4.5,
+    "market_cap_min": 80
 }
 
-# ======================== 股票池不变 ========================
+# ======================== 股票池（原样保留） ========================
 CORE_POOL = {
     "601398.SS": "工商银行", "601939.SS": "建设银行", "601288.SS": "农业银行",
     "601988.SS": "中国银行", "601328.SS": "交通银行", "601166.SS": "兴业银行",
@@ -88,7 +87,7 @@ MY_STOCKS = {
 def is_trading_day():
     today = datetime.now()
     if today.weekday() > 4:
-        logger.info("❌ 今天是周末，休市，直接退出")
+        logger.info("❌ 周末休市")
         return False
     holidays_2026 = [
         "2026-01-01", "2026-01-28", "2026-01-29", "2026-01-30", "2026-01-31",
@@ -98,9 +97,8 @@ def is_trading_day():
     ]
     today_str = today.strftime("%Y-%m-%d")
     if today_str in holidays_2026:
-        logger.info(f"❌ 今天是法定节假日 {today_str}，休市")
+        logger.info(f"❌ 节假日休市: {today_str}")
         return False
-    logger.info("✅ 今天是A股交易日，继续执行")
     return True
 
 def get_market_status():
@@ -111,17 +109,18 @@ def get_market_status():
             return True, "大盘数据获取失败，谨慎开仓"
         close = df["Close"].astype(float)
         ma20 = close.rolling(20, min_periods=1).mean()
-        current_price = close.iloc[-1]
-        ma20_current = ma20.iloc[-1]
-        if current_price > ma20_current:
-            return True, "震荡/上升市，正常开仓"
+        current = close.iloc[-1]
+        if current > ma20.iloc[-1] and ma20.iloc[-1] > ma20.iloc[-2]:
+            return True, "上升市，总仓位上限80%"
+        elif current > ma20.iloc[-1]:
+            return True, "震荡市，总仓位上限50%"
         else:
-            return True, "下跌市，允许轻仓开仓"
-    except:
+            return True, "下跌市，谨慎开仓，严控仓位"
+    except Exception as e:
         return True, "大盘状态异常，谨慎开仓"
 
 def calc_atr(df, period=14):
-    df = df.copy().sort_index()
+    df = df.copy()
     high = df["High"].astype(float)
     low = df["Low"].astype(float)
     close = df["Close"].astype(float)
@@ -133,7 +132,7 @@ def calc_atr(df, period=14):
     return round(atr.iloc[-1], 2)
 
 def calc_technical_indicators(df):
-    df = df.copy().sort_index()
+    df = df.copy()
     close = df["Close"].astype(float)
     high = df["High"].astype(float)
     low = df["Low"].astype(float)
@@ -145,7 +144,6 @@ def calc_technical_indicators(df):
     ma60 = close.rolling(60, min_periods=1).mean()
     ma5_vol = volume.rolling(5, min_periods=1).mean()
 
-    # RSI
     delta = close.diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta).clip(lower=0).rolling(14).mean()
@@ -153,13 +151,11 @@ def calc_technical_indicators(df):
     rsi = 100 - (100 / (1 + rs))
     rsi_val = round(rsi.iloc[-1], 1) if not np.isnan(rsi.iloc[-1]) else 50
 
-    # MACD
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd_line = ema12 - ema26
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
 
-    # KDJ
     low9 = low.rolling(9).min()
     high9 = high.rolling(9).max()
     tr = high9 - low9
@@ -168,30 +164,33 @@ def calc_technical_indicators(df):
     k = rsv.ewm(span=3, adjust=False).mean()
     d = k.ewm(span=3, adjust=False).mean()
 
-    last = -1
     macd_gold = False
     for i in range(3):
         if len(macd_line) < i+2: break
-        if macd_line.iloc[last-i] > signal_line.iloc[last-i] and macd_line.iloc[last-i-1] <= signal_line.iloc[last-i-1]:
+        if macd_line.iloc[-1-i] > signal_line.iloc[-1-i] and macd_line.iloc[-2-i] <= signal_line.iloc[-2-i]:
             macd_gold = True
 
     kdj_gold = False
     for i in range(3):
         if len(k) < i+2: break
-        if k.iloc[last-i] > d.iloc[last-i] and k.iloc[last-i-1] <= d.iloc[last-i-1]:
+        if k.iloc[-1-i] > d.iloc[-1-i] and k.iloc[-2-i] <= d.iloc[-2-i]:
             kdj_gold = True
 
     volume_enlarge = bool(volume.iloc[-3:].max() >= ma5_vol.iloc[-1] * 1.2) if len(volume)>=5 else False
 
     return {
         "price": round(close.iloc[-1], 2),
-        "ma5": round(ma5.iloc[-1], 2), "ma10": round(ma10.iloc[-1], 2),
-        "ma20": round(ma20.iloc[-1], 2), "ma60": round(ma60.iloc[-1], 2),
-        "rsi": rsi_val, "macd_gold": macd_gold, "kdj_gold": kdj_gold,
-        "trend_up": close.iloc[-1] > ma20.iloc[-1],
+        "ma5": round(ma5.iloc[-1], 2),
+        "ma10": round(ma10.iloc[-1], 2),
+        "ma20": round(ma20.iloc[-1], 2),
+        "ma60": round(ma60.iloc[-1], 2),
+        "rsi": rsi_val,
+        "macd_gold": macd_gold,
+        "kdj_gold": kdj_gold,
+        "trend_up": close.iloc[-1] > ma20.iloc[-1] and close.iloc[-1] > ma60.iloc[-1],
         "volume_enlarge": volume_enlarge,
         "atr": calc_atr(df),
-        "prev_low": round(low.iloc[-2], 2) if len(low)>=2 else round(close.iloc[-1]*0.98,2)
+        "prev_low": round(low.iloc[-2], 2) if len(low)>=2 else close.iloc[-1]*0.98
     }
 
 def get_fundamental_data(symbol, pool_type):
@@ -203,11 +202,18 @@ def get_fundamental_data(symbol, pool_type):
         market_cap = info.get("marketCap", 0) / 1e8 if info.get("marketCap") else 0
 
         pe_pass = False
-        if pool_type == "core": pe_pass = pe < FUNDAMENTAL_RED_LINE["core_pe_max"]
-        elif pool_type == "steady": pe_pass = pe < FUNDAMENTAL_RED_LINE["steady_pe_max"]
-        else: pe_pass = pe < FUNDAMENTAL_RED_LINE["satellite_pe_max"]
+        if pool_type == "core":
+            pe_pass = pe < FUNDAMENTAL_RED_LINE["core_pe_max"]
+        elif pool_type == "steady":
+            pe_pass = pe < FUNDAMENTAL_RED_LINE["steady_pe_max"]
+        else:
+            pe_pass = pe < FUNDAMENTAL_RED_LINE["satellite_pe_max"]
 
-        all_pass = pe_pass and pb < FUNDAMENTAL_RED_LINE["pb_max"] and market_cap > FUNDAMENTAL_RED_LINE["market_cap_min"]
+        all_pass = (
+            pe_pass
+            and pb < FUNDAMENTAL_RED_LINE["pb_max"]
+            and market_cap > FUNDAMENTAL_RED_LINE["market_cap_min"]
+        )
         return {
             "pe": round(pe,2) if pe and pe != np.inf else 999,
             "pb": round(pb,2) if pb and pb != np.inf else 999,
@@ -217,144 +223,204 @@ def get_fundamental_data(symbol, pool_type):
     except:
         return {"pe":999,"pb":999,"market_cap":0,"fund_pass":False}
 
-# ======================== 【优化2：买卖点大优化】 ========================
+# ======================== 核心分析（保留你原来的完整结构） ========================
 def get_stock_data(symbol, name, pool_type):
     try:
         logger.info(f"📡 分析 {symbol} {name}")
         tk = yf.Ticker(symbol)
         df = tk.history(period=f"{HIST_DAYS}d", timeout=10)
-        if len(df) < 30: return None
-        
+        if len(df) < 30:
+            return None
+
         tech = calc_technical_indicators(df)
         current_price = tech["price"]
         atr = tech["atr"]
 
-        if current_price > MAX_PRICE: return None
-        fundamental = get_fundamental_data(symbol, pool_type)
-        if not fundamental["fund_pass"]: return None
+        if current_price > MAX_PRICE:
+            return None
 
-        # 择时条件放宽
+        fundamental = get_fundamental_data(symbol, pool_type)
+        if not fundamental["fund_pass"]:
+            return None
+
         core_conds = [tech["trend_up"], tech["volume_enlarge"]]
         core_pass = all(core_conds)
         assist_conds = [tech["macd_gold"], tech["kdj_gold"], tech["rsi"]>30 and tech["rsi"]<60, tech["ma5"]>tech["ma10"]]
-        assist_pass = sum(assist_conds) >= 1  # 4选1即可
+        assist_pass = sum(assist_conds) >= 1
         timing_pass = core_pass and assist_pass
 
-        # ======================== 【优化买卖点：更安全、更顺滑】 ========================
-        buy_price = round(min(tech["prev_low"] * 0.995, current_price * 0.99), 2)
-        stop_loss = round(max(buy_price - atr * 1.2, tech["ma10"] * 0.995, buy_price * 0.95), 2)
-        target_profit = round(min(buy_price + atr * 2.5, buy_price * 1.22), 2)
+        # 买卖点优化
+        buy_price = min(round(tech["prev_low"] * 0.997, 2), round(current_price * 0.99, 2))
+        buy_price = max(buy_price, current_price * 0.97)
+        stop_loss = max(round(buy_price - atr * 1.5, 2), round(tech["ma10"] * 0.99, 2), buy_price * 0.94)
+        target_profit = min(round(buy_price + atr * 2.5, 2), buy_price * 1.2)
 
         profit_space = (target_profit - buy_price) / buy_price
         loss_space = (buy_price - stop_loss) / buy_price
         win_loss_ratio = profit_space / loss_space if loss_space > 0 else 0
 
-        if win_loss_ratio < WIN_LOSS_RATIO_MIN: return None
+        if win_loss_ratio < WIN_LOSS_RATIO_MIN:
+            return None
 
-        # 仓位
+        # 仓位计算
         max_shares_by_risk = int(SINGLE_MAX_RISK / (loss_space * buy_price) // 100 * 100)
-        if pool_type == "core": cap_rate = 0.2
-        elif pool_type == "steady": cap_rate = 0.15
-        else: cap_rate = 0.1
-        max_shares_by_pool = int(CAPITAL * cap_rate / buy_price // 100 * 100)
+        if pool_type == "core":
+            max_shares_by_pool = int(CAPITAL * 0.2 / buy_price // 100 * 100)
+        elif pool_type == "steady":
+            max_shares_by_pool = int(CAPITAL * 0.15 / buy_price // 100 * 100)
+        else:
+            max_shares_by_pool = int(CAPITAL * 0.1 / buy_price // 100 * 100)
         volume = min(max_shares_by_risk, max_shares_by_pool)
         volume = max(volume, 100)
 
-        # 止盈优化
         profit_cover_cost = round(buy_price * (1 + TRADING_COST_RATE + MIN_PROFIT_COVER), 2)
-        profit_mid = round((buy_price + target_profit) / 2, 2)
+        profit_mid = round(buy_price + (target_profit - buy_price) * 0.5, 2)
 
-        total_score = round(random.uniform(7.5, 9.5), 2)
+        pool_weight = 1.5 if pool_type == "core" else 1.2 if pool_type == "steady" else 1.0
+        total_score = round(
+            (sum(core_conds)*2 + sum(assist_conds)*1)*0.4
+            + (3 if fundamental["pe"]<15 else 2 if fundamental["pe"]<25 else 1)*0.3
+            + (win_loss_ratio/3)*0.3 * pool_weight
+        , 2)
+
         buy_signal = timing_pass
 
         return {
-            "symbol": symbol, "code": symbol.replace(".SS","").replace(".SZ",""),
-            "name": name, "pool_type": pool_type, "tech": tech, "fund": fundamental,
-            "win_loss_ratio": round(win_loss_ratio,2), "total_score": total_score,
-            "buy_signal": buy_signal, "signal_text": "🔥 买入信号",
+            "symbol": symbol,
+            "code": symbol.replace(".SS","").replace(".SZ",""),
+            "name": name,
+            "pool_type": pool_type,
+            "tech": tech,
+            "fund": fundamental,
+            "win_loss_ratio": round(win_loss_ratio,2),
+            "total_score": total_score,
+            "buy_signal": buy_signal,
+            "signal_text": "🔥 买入信号",
             "order": {
-                "buy_price": buy_price, "volume": volume, "stop_loss": stop_loss,
+                "buy_price": buy_price,
+                "volume": volume,
+                "stop_loss": stop_loss,
                 "stop_loss_pct": round(loss_space*100,1),
-                "target_profit": target_profit, "profit_cover_cost": profit_cover_cost,
+                "target_profit": target_profit,
+                "profit_cover_cost": profit_cover_cost,
                 "profit_mid": profit_mid
             }
         }
     except Exception as e:
+        logger.warning(f"❌ {symbol} 分析失败: {str(e)}")
         return None
 
 def scan_market(market_can_open):
     all_stocks = {}
     # 自选优先
     for symbol, name in MY_STOCKS.items():
-        data = get_stock_data(symbol, name, "core")
-        if data: all_stocks[symbol] = data
-        time.sleep(random.uniform(0.3,0.6))
+        d = get_stock_data(symbol, name, "core")
+        if d: all_stocks[symbol] = d
+        time.sleep(random.uniform(0.3,0.7))
 
-    # 全池扫描
+    # 核心池
     for symbol, name in CORE_POOL.items():
         if symbol in all_stocks: continue
-        data = get_stock_data(symbol, name, "core")
-        if data: all_stocks[symbol] = data
+        d = get_stock_data(symbol, name, "core")
+        if d: all_stocks[symbol] = d
         time.sleep(random.uniform(0.2,0.4))
 
+    # 稳健池
     for symbol, name in STEADY_POOL.items():
         if symbol in all_stocks: continue
-        data = get_stock_data(symbol, name, "steady")
-        if data: all_stocks[symbol] = data
+        d = get_stock_data(symbol, name, "steady")
+        if d: all_stocks[symbol] = d
         time.sleep(random.uniform(0.2,0.4))
 
-    sorted_stocks = sorted(all_stocks.values(), key=lambda x:(x["buy_signal"],x["total_score"]), reverse=True)[:SELECTION_TOP_N]
-    final_stocks = [s for s in sorted_stocks if s["buy_signal"]]
-    return final_stocks
+    sorted_stocks = sorted(
+        all_stocks.values(),
+        key=lambda x: (x["buy_signal"], x["total_score"]),
+        reverse=True
+    )[:SELECTION_TOP_N]
 
+    return [s for s in sorted_stocks if s["buy_signal"]]
+
+# ======================== 飞书推送（完全恢复你原来的专业完整版） ========================
 def send_feishu_report(stocks, market_tips):
     if not FEISHU_WEBHOOK:
-        logger.error("❌ 飞书Webhook未配置")
+        logger.error("❌ 未配置飞书Webhook")
         return
-    
+
+    now = datetime.now().strftime('%Y-%m-%d %H:%M')
     if not stocks:
-        report = f"""🚀 A股稳健量化策略日报
-📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}
+        msg = f"""🚀 A股稳健量化策略日报
+📅 {now}
 📊 今日大盘状态：{market_tips}
 ==================================================
-⚠️ 今日无符合条件标的
+⚠️ 今日无符合【高胜率+盈亏比≥2:1】的开仓机会
+📌 策略建议：空仓观望，不做无效交易
 ==================================================
+⚠️ 风险提示：本报告仅为量化学习参考，不构成任何投资建议
 """
     else:
-        report = f"""🚀 A股稳健量化策略日报
-📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}
+        msg = f"""🚀 A股稳健量化策略日报
+📅 {now}
 📊 今日大盘状态：{market_tips}
+🎯 核心策略：保本优先+高盈亏比+少交易少犯错
 ==================================================
 """
-        for idx, stock in enumerate(stocks,1):
-            o = stock["order"]
-            pool_name = "核心池" if stock["pool_type"]=="core" else "稳健池" if stock["pool_type"]=="steady" else "卫星池"
-            report += f"""
-【{idx}】{stock['code']} {stock['name']} 🔥 买入
-🏷️ {pool_name} | 盈亏比 {stock['win_loss_ratio']}:1
-现价：{stock['tech']['price']} 元
+        for i, s in enumerate(stocks, 1):
+            o = s["order"]
+            pool_name = {
+                "core": "核心防御池",
+                "steady": "稳健成长池",
+                "satellite": "弹性卫星池"
+            }[s["pool_type"]]
 
-📈 买入价：{o['buy_price']} 元
-📦 仓位：{o['volume']} 股
-🛑 止损：{o['stop_loss']} 元（{o['stop_loss_pct']}%）
-💰 目标：{o['target_profit']} 元
+            msg += f"""
+【{i}】{s['code']} {s['name']} {s['signal_text']}
+🏷️ 所属池：{pool_name} | 💯 综合评分：{s['total_score']} | ⚖️ 盈亏比：{s['win_loss_ratio']}:1
+💵 现价：{s['tech']['price']} 元 | ATR波动率：{s['tech']['atr']} 元
+
+📈 技术面确认：
+趋势向上：是（MA20+MA60上方）| 资金放量：是
+MACD金叉：{'是' if s['tech']['macd_gold'] else '否'} | KDJ金叉：{'是' if s['tech']['kdj_gold'] else '否'}
+RSI：{s['tech']['rsi']} | MA5>MA10：{'是' if s['tech']['ma5']>s['tech']['ma10'] else '否'}
+
+📊 基本面确认：
+市盈率(PE)：{s['fund']['pe']} | 市净率(PB)：{s['fund']['pb']}
+市值：{s['fund']['market_cap']} 亿元 | 基本面达标：是
+
+📋 【专业交易计划】
+👉 买入价：≤ {o['buy_price']} 元
+📦 建议仓位：{o['volume']} 股（单只最大亏损≤300元）
+🛑 止损价：≥ {o['stop_loss']} 元（幅度{o['stop_loss_pct']}%，跌破MA10无条件止损）
+💰 阶梯止盈计划：
+   1. 保本线：{o['profit_cover_cost']} 元（覆盖成本+1%净赚）
+   2. 锁定线：{o['profit_mid']} 元（目标50%）
+   3. 目标线：{o['target_profit']} 元（全部清仓）
 --------------------------------------------------
 """
-        report += "\n⚠️ 仅供学习，不构成投资建议"
+        msg += """
+⚠️ 风险提示：本报告仅为量化学习参考，不构成任何投资建议
+📌 交易铁律：
+1. 不超过建议仓位，不加仓下跌的股票
+2. 到止损价无条件卖出，不扛单
+3. 涨到保本线后，立刻上移止损，绝对不亏本金
+"""
 
     try:
-        requests.post(FEISHU_WEBHOOK, json={"msg_type": "text", "content": {"text": report}}, timeout=10)
-        logger.info("✅ 推送成功")
-    except:
-        logger.error("❌ 推送失败")
+        requests.post(FEISHU_WEBHOOK, json={
+            "msg_type": "text",
+            "content": {"text": msg}
+        }, timeout=10)
+        logger.info("✅ 飞书推送成功")
+    except Exception as e:
+        logger.error(f"❌ 推送失败: {e}")
 
 # ======================== 主程序 ========================
 def main():
-    if not is_trading_day(): return
+    if not is_trading_day():
+        return
     market_can_open, market_tips = get_market_status()
-    selected_stocks = scan_market(market_can_open)
-    send_feishu_report(selected_stocks, market_tips)
-    logger.info("🎉 完成")
+    selected = scan_market(market_can_open)
+    send_feishu_report(selected, market_tips)
+    logger.info("🎉 策略执行完成")
 
 if __name__ == "__main__":
     main()
