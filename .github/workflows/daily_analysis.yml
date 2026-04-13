@@ -1,8 +1,10 @@
 name: 高胜率稳健量化策略
 on:
   schedule:
-    # 北京时间周一到周五 8:30（盘前黄金时间，给足决策时间）
+    # 盘前：北京时间 08:30 运行
     - cron: '30 0 * * 1-5'
+    # 盘中：北京时间 13:30 运行
+    - cron: '30 5 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -16,12 +18,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests pandas numpy yfinance
 
       - name: 执行量化策略
         env:
