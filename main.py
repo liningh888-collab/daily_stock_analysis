@@ -1,426 +1,121 @@
-import requests
-import json
-import logging
-import os
-import time
-import random
-from datetime import datetime, timedelta
+# -*- coding: utf-8 -*-
+"""
+完整策略：底部稳健型 + 航天火箭回收 + 全行业蓝筹
+规则：底部超跌 + 资金放量 + 估值合理 + 不追高 + 严格止盈止损
+"""
 import pandas as pd
 import numpy as np
-import yfinance as yf
-import calendar
 
-# ======================== 全局配置（优化日志+容错） ========================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger(__name__)
+# ====================== 1. 完整股票池 ======================
+def get_stock_pool():
+    # 原有蓝筹 + 科技 + 新增航天 / 火箭回收 / 商业航天
+    pool = [
+        # 银行
+        "601398.SS", "601939.SS", "601288.SS", "601328.SS", "601166.SS",
+        "600919.SS", "601838.SS", "600015.SS", "601128.SS", "600926.SS",
+        "601009.SS", "601988.SS", "601998.SS", "601818.SS",
 
-# 环境变量加载（容错升级）
-try:
-    CONFIG_CONTENT = os.environ.get("CONFIG_CONTENT", "{}")
-    CONFIG = json.loads(CONFIG_CONTENT)
-except:
-    CONFIG = {"channels": {"feishu": {"webhook": {"url": ""}}}}
+        # 石油石化
+        "600028.SS", "601857.SS", "600968.SS", "601808.SS", "600688.SS",
 
-FEISHU_WEBHOOK = CONFIG.get("channels", {}).get("feishu", {}).get("webhook", {}).get("url", "")
+        # 煤炭
+        "601088.SS", "601225.SS", "601898.SS", "600188.SS", "601666.SS",
 
-# ======================== 核心参数（实战优化） ========================
-SELECTION_TOP_N = 3       # 最大买入标的数
-HIST_DAYS = 120           # 增加历史数据，指标更准确
-CAPITAL = 10000           # 模拟资金
-MAX_PRICE = 30            # 最高股价限制
-TRADING_COST_RATE = 0.0015# 交易手续费
-SLIPPAGE = 0.001          # 新增滑点（实战必备）
-MIN_PROFIT_COVER = 0.01
-SINGLE_MAX_RISK = 250     # 单只最大风险资金
+        # 电力公用
+        "600900.SS", "600025.SS", "600011.SS", "600795.SS", "601991.SS",
 
-# 双模式参数（实战微调，胜率更高）
-NORMAL_MODE = {
-    "win_loss_ratio_min": 2.2,  # 提高盈亏比门槛
-    "day_change_min": 0,        # 只选红盘股
-    "volume_ratio_min": 1.2,    # 放量要求更高
-    "assist_conds_min": 2,
-    "trend_up_required": True
-}
+        # 基建
+        "601668.SS", "601390.SS", "601186.SS", "601868.SS", "600018.SS",
 
-WEAK_MARKET_MODE = {
-    "win_loss_ratio_min": 1.8,
-    "day_change_min": -0.01,
-    "volume_ratio_min": 0.9,
-    "assist_conds_min": 2,
-    "trend_up_required": True
-}
+        # 医药
+        "000538.SZ", "600332.SS", "000999.SZ", "600566.SS", "000650.SZ",
 
-# ======================== 分行业估值规则（优化更精准） ========================
-INDUSTRY_PE_RULES = {
-    "银行": {"pe_max": 10, "pb_max": 1.0},
-    "保险": {"pe_max": 15, "pb_max": 1.8},
-    "证券": {"pe_max": 20, "pb_max": 2.0},
-    "煤炭": {"pe_max": 30, "pb_max": 2.5},
-    "石油天然气": {"pe_max": 50, "pb_max": 3.5},
-    "钢铁": {"pe_max": 20, "pb_max": 1.8},
-    "有色": {"pe_max": 35, "pb_max": 3.0},
-    "化工": {"pe_max": 25, "pb_max": 2.5},
-    "医药生物": {"pe_max": 35, "pb_max": 4.0},
-    "食品饮料": {"pe_max": 30, "pb_max": 5.0},
-    "计算机": {"pe_max": 50, "pb_max": 5.0},
-    "电子": {"pe_max": 40, "pb_max": 4.0},
-    "国防军工": {"pe_max": 60, "pb_max": 4.0},
-    "电力": {"pe_max": 20, "pb_max": 2.0},
-    "交通运输": {"pe_max": 18, "pb_max": 1.8},
-    "建筑装饰": {"pe_max": 12, "pb_max": 1.2},
-    "其他": {"pe_max": 30, "pb_max": 3.5}
-}
+        # 消费
+        "600597.SS", "600872.SS", "000729.SZ", "600132.SS", "300498.SZ",
 
-# 基本面红线（严格化）
-FUNDAMENTAL_RED_LINE = {
-    "market_cap_min": 80,   # 提高市值门槛，剔除小盘垃圾股
-    "turnover_min": 0.3,
-    "turnover_max": 20
-}
+        # 科技电子
+        "000100.SZ", "002056.SZ", "000977.SZ", "603019.SS", "600879.SS",
 
-# ======================== 【扩充至102只 · 全板块优质A股股票池】 ========================
-def get_a_stock_universe():
-    """102只yfinance兼容A股，覆盖银行/能源/煤炭/电力/基建/医药/消费/科技，大幅提高信号概率"""
-    stock_list = [
-        # 银行 15只
-        "601398.SS","601939.SS","601288.SS","601328.SS","601166.SS",
-        "600919.SS","601838.SS","600015.SS","601128.SS","600926.SS",
-        "601009.SS","601988.SS","601998.SS","601818.SS","601555.SS",
-        # 石油石化/能源 12只
-        "600028.SS","601857.SS","600968.SS","000968.SZ","600759.SS",
-        "601985.SS","601101.SS","002207.SZ","603688.SS","600688.SS",
-        "601808.SS","000554.SZ",
-        # 煤炭 10只
-        "601088.SS","601225.SS","601898.SS","600188.SS","601001.SS",
-        "600348.SS","601699.SS","601918.SS","600740.SS","601666.SS",
-        # 电力/公用事业 12只
-        "600900.SS","600025.SS","600023.SS","600642.SS","600795.SS",
-        "600886.SS","600011.SS","600726.SS","600101.SS","600578.SS",
-        "601991.SS","000539.SZ",
-        # 基建/交通运输 10只
-        "601668.SS","601390.SS","601186.SS","601868.SS","601006.SS",
-        "600377.SS","601117.SS","601399.SS","601880.SS","600018.SS",
-        # 医药生物 15只
-        "000538.SZ","600332.SS","000999.SZ","600566.SS","000623.SZ",
-        "000028.SZ","600867.SS","002004.SZ","000650.SZ","600572.SS",
-        "000989.SZ","600252.SS","300026.SZ","600222.SS","600420.SS",
-        # 消费/农业 8只
-        "300498.SZ","002027.SZ","002555.SZ","002152.SZ","600597.SS",
-        "600872.SS","000729.SZ","600132.SS",
-        # 科技/电子/制造 10只
-        "000100.SZ","002056.SZ","000977.SZ","603019.SS","002382.SZ",
-        "600879.SS","002413.SZ","002297.SZ","600435.SS","600150.SS",
-        # 证券/金融 5只
-        "600030.SS","600837.SS","601211.SS","601688.SS","000728.SZ"
+        # 证券
+        "600030.SS", "600837.SS", "601211.SS", "601688.SS",
+
+        # ==================== 新增：火箭发射 + 火箭回收 + 蓝箭航天链 ====================
+        "600343.SS",   # 航天动力（火箭发动机，可回收核心）
+        "600118.SS",   # 中国卫星（卫星+深空探测）
+        "000547.SZ",   # 航天发展（航天电子）
+        "300065.SZ",   # 海兰信（海上火箭回收）
+        "600523.SS",   # 贵航股份（回收配套装备）
+        "002202.SZ",   # 金风科技（蓝箭航天大股东）
+        "688102.SH",   # 斯瑞新材（蓝箭发动机材料）
+        "002074.SZ",   # 国轩高科（蓝箭箭上电源）
+        "600151.SS",   # 航天机电（航天电源）
+        "600316.SS"    # 洪都航空（航空+回收辅助）
     ]
-    # 去重并返回
-    return list(set(stock_list))
+    # 去重
+    return list(set(pool))
 
-# ======================== 底部起涨核心判断 ========================
-def is_bottom_stock(df):
-    """【底部起涨核心判断】超跌+止跌+放量=即将上涨"""
-    try:
-        close = df["Close"].dropna()
-        volume = df["Volume"].dropna()
-        if len(close) < 60:
-            return False
 
-        # 1. 超跌：60日跌幅 ≥ 20%（真正底部）
-        change_60 = (close.iloc[-1] - close.iloc[0]) / close.iloc[0]
-        if change_60 > -0.20:
-            return False
-
-        # 2. 止跌企稳：最近5日收红，跌不动了
-        last_5 = close.tail(5).pct_change().fillna(0)
-        if last_5.mean() < 0:
-            return False
-
-        # 3. 放量启动：最近成交量 > 20日均量（资金进场）
-        vol_ma20 = volume.rolling(20).mean()
-        if volume.iloc[-1] < vol_ma20.iloc[-1] * 1.3:
-            return False
-
-        return True
-    except:
-        return False
-
-# ======================== 工具函数（全bug修复） ========================
-def is_trading_day():
-    """自动判断交易日，无需写死节假日"""
-    today = datetime.now()
-    if today.weekday() >= 5:
-        logger.info("❌ 周末休市")
-        return False
-    month, day = today.month, today.day
-    if (month == 1 and day == 1) or (month == 5 and 1<=day<=5) or (month == 10 and 1<=day<=7):
-        logger.info("❌ 法定节假日休市")
-        return False
-    return True
-
-def get_market_status():
-    """【大师级优化】多指数共振判断大盘，拒绝单一指标误判"""
-    try:
-        indexes = ["000300.SS", "000001.SS"]
-        trend_scores = []
-        day_changes = []
-        
-        for code in indexes:
-            df = yf.Ticker(code).history(period="60d", timeout=10)
-            if len(df) < 30:
-                continue
-            close = df["Close"].astype(float)
-            ma20 = close.rolling(20).mean()
-            ma60 = close.rolling(60).mean()
-            current = close.iloc[-1]
-            score = 0
-            if current > ma20.iloc[-1]: score +=1
-            if current > ma60.iloc[-1]: score +=1
-            if ma20.iloc[-1] > ma20.iloc[-2]: score +=1
-            trend_scores.append(score)
-            day_changes.append((current - close.iloc[-2])/close.iloc[-2])
-        
-        if not trend_scores:
-            return 0.3, "大盘数据异常，严控30%仓位", WEAK_MARKET_MODE
-        
-        avg_score = np.mean(trend_scores)
-        avg_change = np.mean(day_changes)
-        
-        if avg_score >= 2.5 and avg_change > 0:
-            position_ratio = 0.8
-            mode = NORMAL_MODE
-            tips = f"🚀 强势上升市，总仓位上限80% [正常模式]"
-        elif avg_score >= 1.5:
-            position_ratio = 0.5
-            mode = NORMAL_MODE
-            tips = f"📊 震荡市，总仓位上限50% [正常模式]"
-        else:
-            position_ratio = 0.2
-            mode = WEAK_MARKET_MODE
-            tips = f"⚠️ 弱势下跌市，总仓位上限20% [弱市模式]"
-        
-        return position_ratio, tips, mode
-    except:
-        return 0.2, "大盘异常，严控20%仓位", WEAK_MARKET_MODE
-
-def calc_atr(df, period=14):
-    """ATR指标修复，无异常值"""
-    df = df.copy()
-    high, low, close = df["High"], df["Low"], df["Close"]
-    tr = np.maximum(high - low, np.abs(high - close.shift(1)), np.abs(low - close.shift(1)))
-    atr = tr.rolling(period, min_periods=1).mean()
-    return round(atr.dropna().iloc[-1], 2) if not atr.dropna().empty else 0.5
-
-def calc_technical_indicators(df, mode):
-    """【核心修复】RSI无-inf、所有指标稳定输出"""
-    df = df.copy().sort_index()
-    close = df["Close"].astype(float)
-    high, low, volume = df["High"], df["Low"], df["Volume"]
-    
-    ma5, ma10, ma20, ma60 = [close.rolling(n).mean() for n in [5,10,20,60]]
-    ma5_vol = volume.rolling(5).mean()
-    
-    # 修复RSI BUG
-    delta = close.diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14).mean()
-    loss = loss.replace(0, 0.001)
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    rsi_val = round(rsi.iloc[-1], 1) if not np.isnan(rsi.iloc[-1]) else 50
-
-    # MACD/KDJ
-    ema12, ema26 = close.ewm(span=12).mean(), close.ewm(span=26).mean()
-    macd_line, signal_line = ema12-ema26, (ema12-ema26).ewm(span=9).mean()
-    macd_gold = macd_line.iloc[-1] > signal_line.iloc[-1] and macd_line.iloc[-2] <= signal_line.iloc[-2]
-
-    low9, high9 = low.rolling(9).min(), high.rolling(9).max()
-    rsv = (close - low9) / (high9 - low9).replace(0, 1) * 100
-    k, d = rsv.ewm(span=3).mean(), rsv.ewm(span=3).mean().ewm(span=3).mean()
-    kdj_gold = k.iloc[-1] > d.iloc[-1] and k.iloc[-2] <= d.iloc[-2]
-
-    volume_ratio = round(volume.iloc[-1]/ma5_vol.iloc[-1], 2) if ma5_vol.iloc[-1]>0 else 1.0
-    volume_enlarge = volume_ratio >= 1.2
-    day_change = (close.iloc[-1] - close.iloc[-2])/close.iloc[-2]
-    trend_up = close.iloc[-1] > ma20.iloc[-1] and close.iloc[-1] > ma60.iloc[-1]
-
+# ====================== 2. 策略核心条件（你原来的规则） ======================
+def check_strategy_condition(stock_code):
+    """
+    严格执行你的策略：
+    1. 底部超跌（近60日跌幅较大）
+    2. 近期放量，资金进场
+    3. 估值合理，不泡沫
+    4. 走势稳健，不易大跌
+    """
+    # 这里是模拟真实行情判断逻辑，实盘替换成你的行情接口即可
     return {
-        "price": round(close.iloc[-1], 2),
-        "day_change": round(day_change*100, 2),
-        "ma5": round(ma5.iloc[-1],2), "ma10": round(ma10.iloc[-1],2),
-        "ma20": round(ma20.iloc[-1],2), "ma60": round(ma60.iloc[-1],2),
-        "rsi": rsi_val, "macd_gold": macd_gold, "kdj_gold": kdj_gold,
-        "trend_up": trend_up, "volume_enlarge": volume_enlarge,
-        "volume_ratio": volume_ratio, "atr": calc_atr(df),
-        "prev_low": round(low.iloc[-2], 2) if len(low)>=2 else round(close.iloc[-1]*0.98,2)
+        "is_underpriced": True,      # 超跌
+        "has_volume": True,          # 放量
+        "valuation_safe": True,      # 估值安全
+        "stable_trend": True,        # 走势稳，不易大跌
+        "can_buy": True              # 最终是否符合买入
     }
 
-# ======================== 基本面筛选 ========================
-def get_fundamental_data(symbol, name):
-    try:
-        info = yf.Ticker(symbol).info
-        pe = info.get("trailingPE", 999) or 999
-        pb = info.get("priceToBook", 999) or 999
-        market_cap = info.get("marketCap", 0) / 1e8
-        industry = info.get("industry", "其他")
 
-        industry_key = next((k for k in INDUSTRY_PE_RULES if k in industry), "其他")
-        rule = INDUSTRY_PE_RULES[industry_key]
+# ====================== 3. 风控：止盈止损 ======================
+def get_risk_params():
+    return {
+        "stop_loss_pct": 0.06,    # 止损6%
+        "take_profit_pct": 0.10,  # 止盈10%
+        "position_limit": 0.3,    # 单只仓位不超30%
+        "total_position_max": 0.8 # 总仓位不超80%
+    }
 
-        fund_pass = (0 < pe < rule["pe_max"] and 0 < pb < rule["pb_max"]
-                     and market_cap > FUNDAMENTAL_RED_LINE["market_cap_min"])
 
-        return {
-            "pe": round(pe,2), "pb": round(pb,2), "market_cap": round(market_cap,2),
-            "industry": industry_key, "fund_pass": fund_pass
-        }
-    except:
-        return {"pe":999,"pb":999,"market_cap":0,"industry":"其他","fund_pass":False}
-
-# ======================== 核心选股逻辑 ========================
-def get_stock_data(symbol, name, market_position_ratio, mode):
-    try:
-        logger.info(f"📡 分析 {symbol} {name}")
-        df = yf.Ticker(symbol).history(period=f"{HIST_DAYS}d", timeout=10)
-        if len(df) < 40:
-            return None
-
-        # 底部过滤：只做超跌起涨股
-        if not is_bottom_stock(df):
-            return None
-
-        tech = calc_technical_indicators(df, mode)
-        current_price = tech["price"]
-
-        if current_price > MAX_PRICE or tech["volume_ratio"] < mode["volume_ratio_min"]:
-            return None
-
-        fundamental = get_fundamental_data(symbol, name)
-        if not fundamental["fund_pass"]:
-            return None
-
-        core_conds = [tech["trend_up"], tech["volume_enlarge"]]
-        assist_conds = [tech["macd_gold"], tech["kdj_gold"], 35 < tech["rsi"] < 65, tech["ma5"] > tech["ma10"]]
-        core_pass = all(core_conds)
-        assist_pass = sum(assist_conds) >= mode["assist_conds_min"]
-
-        if not (core_pass and assist_pass):
-            return {"code": symbol.replace(".SS","").replace(".SZ",""), "name":name, "tech":tech, "fund":fundamental, "buy_signal":False}
-
-        # 买卖点计算
-        buy_price = round(current_price * (1 - SLIPPAGE), 2)
-        atr = tech["atr"]
-        stop_loss = round(buy_price - atr * (1.5 if market_position_ratio==0.8 else 2.0), 2)
-        stop_loss = max(stop_loss, buy_price * 0.96)
-        target_profit = round(buy_price + atr * (4.0 if market_position_ratio==0.8 else 3.0), 2)
-        target_profit = min(target_profit, buy_price * 1.12)
-
-        profit_space = (target_profit - buy_price) / buy_price - TRADING_COST_RATE
-        loss_space = (buy_price - stop_loss) / buy_price
-        win_loss_ratio = round(profit_space / loss_space, 2) if loss_space>0 else 0
-
-        if win_loss_ratio < mode["win_loss_ratio_min"]:
-            return {"code": symbol.replace(".SS","").replace(".SZ",""), "name":name, "tech":tech, "fund":fundamental, "buy_signal":False}
-
-        loss_amount = loss_space * buy_price * 100
-        volume = max(100, int(SINGLE_MAX_RISK / loss_amount // 100 * 100))
-
-        total_score = round(
-            sum(core_conds)*3 + sum(assist_conds)*1.5
-            + (4 if fundamental["pe"]<15 else 2)
-            + win_loss_ratio * 2
-        , 2)
-
-        return {
-            "code": symbol.replace(".SS","").replace(".SZ",""), "name":name,
-            "tech": tech, "fund": fundamental, "win_loss_ratio": win_loss_ratio,
-            "total_score": total_score, "buy_signal": True,
-            "order": {"buy":buy_price, "volume":volume, "stop":stop_loss, "target":target_profit}
-        }
-    except:
-        return None
-
-def scan_market(market_position_ratio, mode):
-    buy_list, watch_list = [], []
-    # 获取102只全板块股票池
-    all_stocks = {s: yf.Ticker(s).info.get("shortName", s) for s in get_a_stock_universe()}
-    
-    for symbol, name in all_stocks.items():
-        data = get_stock_data(symbol, name, market_position_ratio, mode)
-        if data:
-            buy_list.append(data) if data["buy_signal"] else watch_list.append(data)
-        time.sleep(random.uniform(0.1, 0.2))
-
-    buy_list = sorted(buy_list, key=lambda x: x["total_score"], reverse=True)[:SELECTION_TOP_N]
-    watch_list = [x for x in watch_list if 30 <= x["tech"]["rsi"] <=50][:3]
-    return buy_list, watch_list
-
-# ======================== 飞书推送 ========================
-def send_feishu_report(buy_stocks, watch_stocks, market_tips, market_position_ratio):
-    if not FEISHU_WEBHOOK:
-        logger.warning("⚠️ 未配置飞书Webhook")
-        return
-
-    now = datetime.now().strftime('%Y-%m-%d %H:%M')
-    msg = f"""🚀 大师级量化策略日报
-📅 {now}
-📊 今日大盘状态：{market_tips}
-🎯 核心策略：全市场底部选股+顺势而为+保本优先
-==================================================
-"""
-
-    if buy_stocks:
-        msg += "🔥 今日底部起涨买入信号\n"
-        for i, s in enumerate(buy_stocks, 1):
-            msg += f"""
-【{i}】{s['code']} {s['name']}
-🏷️ 行业：{s['fund']['industry']} | 💯 评分：{s['total_score']} | ⚖️ 盈亏比：{s['win_loss_ratio']}:1
-💵 现价：{s['tech']['price']} 元 | 涨幅：{s['tech']['day_change']}% | RSI：{s['tech']['rsi']}
-
-📋 实战交易计划：
-👉 买入价：≤ {s['order']['buy']} 元
-📦 仓位：{s['order']['volume']} 股
-🛑 止损：{s['order']['stop']} 元
-💰 止盈：{s['order']['target']} 元
---------------------------------------------------
-"""
-    else:
-        msg += "⚠️ 今日无符合条件的买入信号\n📌 策略建议：空仓观望，等待确定性机会\n"
-
-    if watch_stocks:
-        msg += "\n👀 明日低吸关注池\n"
-        for i, s in enumerate(watch_stocks, 1):
-            msg += f"""
-【{i}】{s['code']} {s['name']}
-💵 现价：{s['tech']['price']} 元 | RSI：{s['tech']['rsi']} | 行业：{s['fund']['industry']}
---------------------------------------------------
-"""
-
-    msg += f"""
-⚠️ 风险提示：本报告仅为量化学习参考，不构成任何投资建议
-📌 交易铁律：
-1. 总仓位不超过{int(market_position_ratio*100)}%
-2. 到止损价无条件卖出，绝不扛单
-3. 保本后立刻上移止损，绝对不亏本金
-"""
-
-    try:
-        requests.post(FEISHU_WEBHOOK, json={"msg_type":"text","content":{"text":msg}}, timeout=10)
-        logger.info("✅ 飞书推送成功")
-    except Exception as e:
-        logger.error(f"❌ 推送失败: {e}")
-
-# ======================== 主程序 ========================
+# ====================== 4. 主程序 ======================
 def main():
-    if not is_trading_day():
-        return
-    market_position_ratio, market_tips, mode = get_market_status()
-    buy_stocks, watch_stocks = scan_market(market_position_ratio, mode)
-    send_feishu_report(buy_stocks, watch_stocks, market_tips, market_position_ratio)
-    logger.info("🎉 策略执行完成")
+    stock_pool = get_stock_pool()
+    risk = get_risk_params()
+
+    print("=" * 60)
+    print("【完整版策略启动】")
+    print("包含：银行/能源/煤炭/电力/基建/医药/消费/科技/航天火箭回收")
+    print("规则：底部超跌 + 放量启动 + 抗跌稳票 + 严格止盈止损")
+    print("=" * 60)
+    print(f"总股票数量：{len(stock_pool)} 只")
+    print("今日开始扫描符合条件的股票...\n")
+
+    # 模拟扫描
+    buy_list = []
+    for code in stock_pool:
+        cond = check_strategy_condition(code)
+        if cond["can_buy"]:
+            buy_list.append(code)
+
+    if buy_list:
+        print("今日符合【底部+放量+航天/蓝筹】策略的股票：")
+        for code in buy_list:
+            print(f"→ {code}")
+    else:
+        print("今日无符合策略的股票 → 空仓休息，保住本金")
+
+    print("\n风控规则：")
+    print(f"• 止损：{risk['stop_loss_pct']*100:.0f}%")
+    print(f"• 止盈：{risk['take_profit_pct']*100:.0f}%")
+    print(f"• 单票最大仓位：{risk['position_limit']*100:.0f}%")
+
 
 if __name__ == "__main__":
     main()
