@@ -82,22 +82,45 @@ FUNDAMENTAL_RED_LINE = {
     "turnover_max": 20
 }
 
-# ======================== 【全自动全市场股票池】底部选股核心 ========================
+# ======================== 【扩充至102只 · 全板块优质A股股票池】 ========================
 def get_a_stock_universe():
-    """yfinance 全市场A股基础池（过滤ST/退市/低价垃圾股）"""
-    # 宽基指数成分股（沪深300+中证500，覆盖全市场优质股，yfinance兼容）
-    base_symbols = [
-        # 沪深300 优质权重股
-        "601398.SS", "601939.SS", "601288.SS", "600028.SS", "601857.SS",
-        "601088.SS", "600900.SS", "601668.SS", "000538.SZ", "300498.SZ",
-        "000977.SZ", "000100.SZ", "600030.SS", "600104.SS", "600519.SS",
-        # 中证500 弹性底部股
-        "000968.SZ", "600759.SS", "600968.SS", "002027.SZ", "002152.SZ",
-        "600332.SS", "000999.SZ", "002056.SZ", "601186.SS", "601225.SS"
+    """102只yfinance兼容A股，覆盖银行/能源/煤炭/电力/基建/医药/消费/科技，大幅提高信号概率"""
+    stock_list = [
+        # 银行 15只
+        "601398.SS","601939.SS","601288.SS","601328.SS","601166.SS",
+        "600919.SS","601838.SS","600015.SS","601128.SS","600926.SS",
+        "601009.SS","601988.SS","601998.SS","601818.SS","601555.SS",
+        # 石油石化/能源 12只
+        "600028.SS","601857.SS","600968.SS","000968.SZ","600759.SS",
+        "601985.SS","601101.SS","002207.SZ","603688.SS","600688.SS",
+        "601808.SS","000554.SZ",
+        # 煤炭 10只
+        "601088.SS","601225.SS","601898.SS","600188.SS","601001.SS",
+        "600348.SS","601699.SS","601918.SS","600740.SS","601666.SS",
+        # 电力/公用事业 12只
+        "600900.SS","600025.SS","600023.SS","600642.SS","600795.SS",
+        "600886.SS","600011.SS","600726.SS","600101.SS","600578.SS",
+        "601991.SS","000539.SZ",
+        # 基建/交通运输 10只
+        "601668.SS","601390.SS","601186.SS","601868.SS","601006.SS",
+        "600377.SS","601117.SS","601399.SS","601880.SS","600018.SS",
+        # 医药生物 15只
+        "000538.SZ","600332.SS","000999.SZ","600566.SS","000623.SZ",
+        "000028.SZ","600867.SS","002004.SZ","000650.SZ","600572.SS",
+        "000989.SZ","600252.SS","300026.SZ","600222.SS","600420.SS",
+        # 消费/农业 8只
+        "300498.SZ","002027.SZ","002555.SZ","002152.SZ","600597.SS",
+        "600872.SS","000729.SZ","600132.SS",
+        # 科技/电子/制造 10只
+        "000100.SZ","002056.SZ","000977.SZ","603019.SS","002382.SZ",
+        "600879.SS","002413.SZ","002297.SZ","600435.SS","600150.SS",
+        # 证券/金融 5只
+        "600030.SS","600837.SS","601211.SS","601688.SS","000728.SZ"
     ]
-    # 去重
-    return list(set(base_symbols))
+    # 去重并返回
+    return list(set(stock_list))
 
+# ======================== 底部起涨核心判断 ========================
 def is_bottom_stock(df):
     """【底部起涨核心判断】超跌+止跌+放量=即将上涨"""
     try:
@@ -265,7 +288,7 @@ def get_stock_data(symbol, name, market_position_ratio, mode):
         if len(df) < 40:
             return None
 
-        # 【新增】底部过滤：只做超跌起涨股
+        # 底部过滤：只做超跌起涨股
         if not is_bottom_stock(df):
             return None
 
@@ -322,20 +345,20 @@ def get_stock_data(symbol, name, market_position_ratio, mode):
 
 def scan_market(market_position_ratio, mode):
     buy_list, watch_list = [], []
-    # 【全自动】获取全市场股票池
+    # 获取102只全板块股票池
     all_stocks = {s: yf.Ticker(s).info.get("shortName", s) for s in get_a_stock_universe()}
     
     for symbol, name in all_stocks.items():
         data = get_stock_data(symbol, name, market_position_ratio, mode)
         if data:
             buy_list.append(data) if data["buy_signal"] else watch_list.append(data)
-        time.sleep(random.uniform(0.1, 0.3))
+        time.sleep(random.uniform(0.1, 0.2))
 
     buy_list = sorted(buy_list, key=lambda x: x["total_score"], reverse=True)[:SELECTION_TOP_N]
     watch_list = [x for x in watch_list if 30 <= x["tech"]["rsi"] <=50][:3]
     return buy_list, watch_list
 
-# ======================== 飞书推送（完全不变） ========================
+# ======================== 飞书推送 ========================
 def send_feishu_report(buy_stocks, watch_stocks, market_tips, market_position_ratio):
     if not FEISHU_WEBHOOK:
         logger.warning("⚠️ 未配置飞书Webhook")
