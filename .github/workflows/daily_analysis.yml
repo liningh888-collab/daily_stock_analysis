@@ -1,7 +1,7 @@
 name: 高胜率稳健量化策略
 on:
   schedule:
-    - cron: '30 0 * * 1-5'    # 北京时间 08:30 准点推送
+    - cron: '0 1 * * 1-5'    # 北京时间 周一到周五 早上9:00 准点触发
   workflow_dispatch:
 
 jobs:
