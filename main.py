@@ -477,6 +477,7 @@ PB：{s['fund']['pb']} | 市值：{s['fund']['market_cap']}亿
 
 # ======================== 主程序 ========================
 def main():
+    # ✅ 已删除所有等待逻辑，启动就执行，上午立刻发！
     if not is_trading_day():
         return
     market_position_ratio, market_tips, mode = get_market_status()
