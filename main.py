@@ -29,29 +29,31 @@ FEISHU_WEBHOOK = CONFIG.get("channels", {}).get("feishu", {}).get("webhook", {})
 if not FEISHU_WEBHOOK:
     logger.warning("⚠️ 未配置飞书 Webhook，推送功能将失效")
 
-# ======================== 核心参数【宽松稳健版】 ========================
+# ======================== 核心参数【现价买入版】 ========================
 SELECTION_TOP_N = 3
 HIST_DAYS = 90
 CAPITAL = 10000
-MAX_PRICE = 50          # 从30放宽到50
+MAX_PRICE = 50
 TRADING_COST_RATE = 0.0015
 MIN_PROFIT_COVER = 0.01
 SINGLE_MAX_RISK = 250
 
-# 智能双模式【大幅放宽，保证每天有信号】
+# 智能双模式
 NORMAL_MODE = {
-    "win_loss_ratio_min": 1.3,    # 从2.0→1.3
-    "day_change_min": -0.02,      # 从-0.005→-0.02
-    "volume_ratio_min": 0.7,      # 从1.0→0.7
-    "assist_conds_min": 1,        # 从2→1
-    "trend_up_required": False    # 不强制必须趋势向上
+    "win_loss_ratio_min": 1.3,
+    "day_change_min": -0.02,
+    "day_change_max": 0.05,  # ✅ 新增：当日涨幅上限5%，避免追高
+    "volume_ratio_min": 0.7,
+    "assist_conds_min": 1,
+    "trend_up_required": False
 }
 
 WEAK_MARKET_MODE = {
-    "win_loss_ratio_min": 1.1,    # 从1.7→1.1
-    "day_change_min": -0.03,      # 从-0.015→-0.03
-    "volume_ratio_min": 0.5,      # 从0.8→0.5
-    "assist_conds_min": 0,        # 从1→0，不强制辅助条件
+    "win_loss_ratio_min": 1.1,
+    "day_change_min": -0.03,
+    "day_change_max": 0.04,  # ✅ 弱市涨幅上限4%
+    "volume_ratio_min": 0.5,
+    "assist_conds_min": 0,
     "trend_up_required": False
 }
 
@@ -79,7 +81,7 @@ INDUSTRY_PE_RULES = {
 }
 
 FUNDAMENTAL_RED_LINE = {
-    "market_cap_min": 30,    # 从50→30
+    "market_cap_min": 30,
     "turnover_min": 0.1,
     "turnover_max": 30
 }
@@ -120,10 +122,9 @@ SATELLITE_POOL = {
 }
 
 MY_STOCKS = {
-    "600028.SS": "中国石化",
-    "600968.SS": "海油发展",
-    "000968.SZ": "蓝焰控股",
-    "600759.SS": "洲际油气"
+    "600726.SS": "华电能源", "601016.SS": "节能风电", "600023.SS": "浙能电力",
+    "600028.SS": "中国石化", "600968.SS": "海油发展", "000968.SZ": "蓝焰控股",
+    "600759.SS": "洲际油气", "002132.SZ": "恒星科技"
 }
 
 # ======================== 工具函数 ========================
@@ -208,7 +209,10 @@ def calc_technical_indicators(df, mode):
     loss = (-delta.clip(lower=0)).rolling(14).mean()
     rs = gain / loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
-    rsi_val = round(rsi.iloc[-1], 1) if not np.isnan(rsi.iloc[-1]) else 50
+    # ✅ 修复RSI无穷大问题
+    rsi = rsi.replace([np.inf, -np.inf], 100)
+    rsi = rsi.fillna(50)
+    rsi_val = round(rsi.iloc[-1], 1)
 
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
@@ -242,6 +246,7 @@ def calc_technical_indicators(df, mode):
     open_price = open_.iloc[-1]
     day_change = (current_price - open_price) / open_price
     is_intraday_strong = day_change >= mode["day_change_min"]
+    is_not_overbought = day_change <= mode["day_change_max"]  # ✅ 新增：涨幅不超过上限
 
     if mode["trend_up_required"]:
         trend_up = close.iloc[-1] > ma20.iloc[-1] and close.iloc[-1] > ma60.iloc[-1]
@@ -264,7 +269,9 @@ def calc_technical_indicators(df, mode):
         "volume_ratio": volume_ratio,
         "atr": calc_atr(df),
         "prev_low": round(low.iloc[-2], 2) if len(low)>=2 else round(current_price*0.98, 2),
-        "is_intraday_strong": is_intraday_strong
+        "prev_high": round(high.iloc[-2], 2) if len(high)>=2 else round(current_price*1.03, 2),
+        "is_intraday_strong": is_intraday_strong,
+        "is_not_overbought": is_not_overbought
     }
 
 def get_fundamental_data(symbol, name):
@@ -275,13 +282,20 @@ def get_fundamental_data(symbol, name):
         pb = info.get("priceToBook", 999)
         market_cap = info.get("marketCap", 0) / 1e8 if info.get("marketCap") else 0
         turnover = info.get("averageVolume10days", 0) / info.get("sharesOutstanding", 1) * 100 if info.get("sharesOutstanding") else 1.0
-        industry = info.get("industry", "其他")
+        industry = info.get("industry", "Other")
 
-        industry_key = "其他"
-        for key in INDUSTRY_PE_RULES.keys():
-            if key in industry:
-                industry_key = key
-                break
+        # ✅ 修复行业匹配问题
+        industry_map = {
+            "Thermal Coal": "煤炭", "Oil & Gas Integrated": "石油天然气",
+            "Electric Utilities": "电力", "Railroads": "交通运输",
+            "Banks - Diversified": "银行", "Insurance - Diversified": "保险",
+            "Steel": "钢铁", "Chemicals": "化工", "Pharmaceuticals": "医药生物",
+            "Food Products": "食品饮料", "Retail - Defensive": "零售",
+            "Software - Application": "计算机", "Electronic Components": "电子",
+            "Aerospace & Defense": "国防军工", "Communication Equipment": "通信",
+            "Construction & Engineering": "建筑装饰"
+        }
+        industry_key = industry_map.get(industry, "其他")
 
         pe_max = INDUSTRY_PE_RULES[industry_key]["pe_max"]
         pb_max = INDUSTRY_PE_RULES[industry_key]["pb_max"]
@@ -326,6 +340,14 @@ def get_stock_data(symbol, name, pool_type, market_position_ratio, mode):
         if not tech["is_intraday_strong"]:
             return None
 
+        # ✅ 新增：涨幅超过上限不推荐
+        if not tech["is_not_overbought"]:
+            return {
+                "symbol": symbol, "code": symbol.replace(".SS","").replace(".SZ",""), "name": name,
+                "pool_type": pool_type, "tech": tech, "fund": fundamental,
+                "buy_signal": False, "signal_text": "⚠️ 涨幅过大，观望"
+            }
+
         fundamental = get_fundamental_data(symbol, name)
 
         core_conds = [tech["trend_up"], tech["volume_enlarge"]]
@@ -334,8 +356,9 @@ def get_stock_data(symbol, name, pool_type, market_position_ratio, mode):
         assist_pass = sum(assist_conds) >= mode["assist_conds_min"]
         timing_pass = core_pass or assist_pass
 
-        buy_price = min(round(tech["prev_low"] * 0.998, 2), round(current_price * 0.992, 2))
-        buy_price = max(buy_price, current_price * 0.97)
+        # ✅ 现价买入：直接用当前价，允许上浮0.2%确保成交
+        buy_price = round(current_price * 1.002, 2)
+        buy_price = min(buy_price, round(current_price * 1.005, 2))
 
         stop_loss = round(buy_price - atr * 1.8, 2)
         stop_loss_min = round(buy_price * 0.975, 2)
@@ -358,11 +381,12 @@ def get_stock_data(symbol, name, pool_type, market_position_ratio, mode):
                 "buy_signal": False, "signal_text": "👀 关注"
             }
 
+        # ✅ 参考仓位（基于现价）
         max_shares_by_risk = int(SINGLE_MAX_RISK / (loss_space * buy_price) // 100 * 100)
         pool_max = {"core":0.25,"steady":0.18,"satellite":0.12}.get(pool_type,0.1)
         max_shares_by_pool = int(CAPITAL * pool_max / buy_price // 100 * 100)
-        volume = min(max_shares_by_risk, max_shares_by_pool)
-        volume = max(volume, 100)
+        reference_volume = min(max_shares_by_risk, max_shares_by_pool)
+        reference_volume = max(reference_volume, 100)
 
         profit_cover_cost = round(buy_price * (1 + TRADING_COST_RATE + MIN_PROFIT_COVER), 2)
         profit_mid = round(buy_price + (target_profit - buy_price)*0.6, 2)
@@ -378,9 +402,11 @@ def get_stock_data(symbol, name, pool_type, market_position_ratio, mode):
             "symbol": symbol, "code": symbol.replace(".SS","").replace(".SZ",""), "name": name,
             "pool_type": pool_type, "tech": tech, "fund": fundamental,
             "win_loss_ratio": win_loss_ratio, "total_score": total_score,
-            "buy_signal": True, "signal_text": "🔥 买入信号",
+            "buy_signal": True, "signal_text": "🔥 现价买入",
             "order": {
-                "buy_price": buy_price, "volume": volume,
+                "buy_type": "现价买入",
+                "reference_price": buy_price,
+                "reference_volume": reference_volume,
                 "stop_loss": stop_loss, "stop_loss_pct": round(loss_space*100,1),
                 "target_profit": target_profit, "profit_cover_cost": profit_cover_cost, "profit_mid": profit_mid
             }
@@ -416,15 +442,15 @@ def send_feishu_report(buy_stocks, watch_stocks, market_tips, market_position_ra
         return
 
     now = datetime.now().strftime('%Y-%m-%d %H:%M')
-    msg = f"""🚀 大师级量化策略日报
+    msg = f"""🚀 大师级量化策略日报【现价买入版】
 📅 {now}
 📊 今日大盘状态：{market_tips}
-🎯 核心策略：分行业估值+顺势而为+保本优先
+🎯 核心策略：分行业估值+顺势而为+现价即买
 ==================================================
 """
 
     if buy_stocks:
-        msg += "🔥 今日买入信号\n"
+        msg += "🔥 今日买入信号（收到后立刻现价下单）\n"
         for i, s in enumerate(buy_stocks, 1):
             o = s["order"]
             pool_name = {"core":"核心防御池","steady":"稳健成长池","satellite":"弹性卫星池"}[s["pool_type"]]
@@ -443,8 +469,8 @@ PE：{s['fund']['pe']}
 PB：{s['fund']['pb']} | 市值：{s['fund']['market_cap']}亿
 
 📋 交易计划：
-👉 买入价：≤ {o['buy_price']} 元
-📦 仓位：{o['volume']} 股
+👉 买入方式：{o['buy_type']}（开盘价附近）
+📦 参考仓位：{o['reference_volume']} 股（按开盘价调整）
 🛑 止损：≥ {o['stop_loss']} 元（{o['stop_loss_pct']}%）
 💰 止盈：{o['target_profit']} 元
 --------------------------------------------------
@@ -467,6 +493,7 @@ PB：{s['fund']['pb']} | 市值：{s['fund']['market_cap']}亿
 1. 总仓位不超过{int(market_position_ratio*100)}%
 2. 到止损价无条件卖出，绝不扛单
 3. 保本后立刻上移止损，绝对不亏本金
+4. 开盘涨幅超过5%的股票放弃买入
 """
 
     try:
@@ -477,7 +504,6 @@ PB：{s['fund']['pb']} | 市值：{s['fund']['market_cap']}亿
 
 # ======================== 主程序 ========================
 def main():
-    # ✅ 已删除所有等待逻辑，启动就执行，上午立刻发！
     if not is_trading_day():
         return
     market_position_ratio, market_tips, mode = get_market_status()
