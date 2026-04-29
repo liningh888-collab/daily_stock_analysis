@@ -1,14 +1,13 @@
 name: 高胜率稳健量化策略
 on:
   schedule:
-    # ✅ 优化：提前到 UTC 0:00（北京时间 8:00），预留足够缓冲
-    - cron: '0 0 * * 1-5'
+    # 倒推1小时20分 → 北京时间 周一~周五 9:31 运行
+    - cron: '31 1 * * 1-5'
   workflow_dispatch:
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    # ✅ 优化：超时时间从 3 分钟改成 30 分钟，避免任务被强制终止
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +22,5 @@ jobs:
       - name: 运行策略
         env:
           CONFIG_CONTENT: ${{ secrets.CONFIG_CONTENT }}
-          # ✅ 新增：显式设置时区为北京时间
           TZ: Asia/Shanghai
         run: python main.py
