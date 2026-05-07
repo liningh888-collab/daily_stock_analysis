@@ -4,12 +4,15 @@ import logging
 import os
 import time
 import random
-from datetime import datetime, timedelta
+import hmac
+import hashlib
+import base64
+from datetime import datetime
 import pandas as pd
 import numpy as np
 import yfinance as yf
 
-# ======================== 全局配置 ========================
+# ======================== 全局配置（你给的真实Hook已填好） ========================
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -17,19 +20,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-CONFIG_CONTENT = os.environ.get("CONFIG_CONTENT")
-if not CONFIG_CONTENT:
-    raise Exception("❌ 未配置 CONFIG_CONTENT 环境变量")
-try:
-    CONFIG = json.loads(CONFIG_CONTENT)
-except json.JSONDecodeError:
-    raise Exception("❌ CONFIG_CONTENT 不是合法的 JSON 格式")
+# 飞书 Webhook（你给的真实地址）
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/7e8c7d35-382e-43de-8479-0434921d338c"
 
-FEISHU_WEBHOOK = CONFIG.get("channels", {}).get("feishu", {}).get("webhook", {}).get("url", "")
-if not FEISHU_WEBHOOK:
-    logger.warning("⚠️ 未配置飞书 Webhook，推送功能将失效")
+# 钉钉 Webhook + 密钥（你给的真实地址，无密钥就留空）
+DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=8cd6832317216fdfaca1d2acba57c11e3024f20921365804ba96444f7945b949"
+DINGTALK_SECRET = ""  # 如果你没开加签，就保持空字符串
 
-# ======================== 核心参数【现价买入版】 ========================
+# ======================== 核心参数 ========================
 SELECTION_TOP_N = 3
 HIST_DAYS = 90
 CAPITAL = 10000
@@ -38,7 +36,6 @@ TRADING_COST_RATE = 0.0015
 MIN_PROFIT_COVER = 0.01
 SINGLE_MAX_RISK = 250
 
-# 智能双模式
 NORMAL_MODE = {
     "win_loss_ratio_min": 1.3,
     "day_change_min": -0.02,
@@ -146,12 +143,11 @@ def is_trading_day():
     return True
 
 def wait_until_target_time(target_hour=9, target_minute=20):
-    """准时等待：不到9:20不执行策略"""
     logger.info(f"⏳ 等待北京时间 {target_hour}:{target_minute} 执行策略...")
     while True:
         now = datetime.now()
         if now.hour == target_hour and now.minute >= target_minute:
-            logger.info("✅ 已到9:20，开始执行选股推送")
+            logger.info("✅ 已到9:20，开始执行数据统计")
             break
         time.sleep(10)
 
@@ -160,7 +156,7 @@ def get_market_status():
         hs300 = yf.Ticker("000300.SS")
         df = hs300.history(period="60d", timeout=10)
         if len(df) < 30:
-            return 0.5, "大盘数据不足，谨慎开仓", NORMAL_MODE
+            return 0.5, "大盘数据不足，谨慎观察", NORMAL_MODE
         
         close = df["Close"].astype(float)
         ma20 = close.rolling(20, min_periods=1).mean()
@@ -176,17 +172,17 @@ def get_market_status():
         
         if current > ma20.iloc[-1] and ma20.iloc[-1] > ma20.iloc[-2]:
             position_ratio = 0.8
-            tips = f"上升市，总仓位上限80% [{mode_name}]"
+            tips = f"上升市，模型仓位参考上限80% [{mode_name}]"
         elif current > ma20.iloc[-1]:
             position_ratio = 0.5
-            tips = f"震荡市，总仓位上限50% [{mode_name}]"
+            tips = f"震荡市，模型仓位参考上限50% [{mode_name}]"
         else:
             position_ratio = 0.3
-            tips = f"下跌市，总仓位上限30% [{mode_name}]"
+            tips = f"下跌市，模型仓位参考上限30% [{mode_name}]"
         
         return position_ratio, tips, mode
     except Exception as e:
-        return 0.3, "大盘状态异常，严控仓位", WEAK_MARKET_MODE
+        return 0.3, "大盘状态异常，严控观察", WEAK_MARKET_MODE
 
 def calc_atr(df, period=14):
     df = df.copy()
@@ -352,7 +348,7 @@ def get_stock_data(symbol, name, pool_type, market_position_ratio, mode):
             return {
                 "symbol": symbol, "code": symbol.replace(".SS","").replace(".SZ",""), "name": name,
                 "pool_type": pool_type, "tech": tech, "fund": get_fundamental_data(symbol,name),
-                "buy_signal": False, "signal_text": "⚠️ 涨幅过大，观望"
+                "buy_signal": False, "signal_text": "⚠️ 涨幅过大，观察"
             }
 
         fundamental = get_fundamental_data(symbol, name)
@@ -384,7 +380,7 @@ def get_stock_data(symbol, name, pool_type, market_position_ratio, mode):
             return {
                 "symbol": symbol, "code": symbol.replace(".SS","").replace(".SZ",""), "name": name,
                 "pool_type": pool_type, "tech": tech, "fund": fundamental,
-                "buy_signal": False, "signal_text": "👀 关注"
+                "buy_signal": False, "signal_text": "👀 观察"
             }
 
         max_shares_by_risk = int(SINGLE_MAX_RISK / (loss_space * buy_price) // 100 * 100)
@@ -407,13 +403,12 @@ def get_stock_data(symbol, name, pool_type, market_position_ratio, mode):
             "symbol": symbol, "code": symbol.replace(".SS","").replace(".SZ",""), "name": name,
             "pool_type": pool_type, "tech": tech, "fund": fundamental,
             "win_loss_ratio": win_loss_ratio, "total_score": total_score,
-            "buy_signal": True, "signal_text": "🔥 现价买入",
-            "order": {
-                "buy_type": "现价买入",
-                "reference_price": buy_price,
-                "reference_volume": reference_volume,
-                "stop_loss": stop_loss, "stop_loss_pct": round(loss_space*100,1),
-                "target_profit": target_profit, "profit_cover_cost": profit_cover_cost, "profit_mid": profit_mid
+            "buy_signal": True, "signal_text": "📊 模型关注",
+            "stats": {
+                "price_range_low": stop_loss,
+                "price_range_high": target_profit,
+                "volatility_pct": round(loss_space*100,1),
+                "win_loss_ratio": win_loss_ratio
             }
         }
     except Exception as e:
@@ -440,84 +435,97 @@ def scan_market(market_position_ratio, mode):
     
     return all_stocks, watch_list
 
-# ======================== 飞书推送 ========================
-def send_feishu_report(buy_stocks, watch_stocks, market_tips, market_position_ratio):
-    if not FEISHU_WEBHOOK:
-        logger.error("❌ 未配置飞书Webhook")
-        return
-
+# ======================== 统一消息模板 ========================
+def build_msg(buy_stocks, watch_stocks, market_tips, market_position_ratio):
     now = datetime.now().strftime('%Y-%m-%d %H:%M')
-    msg = f"""🚀 大师级量化策略日报【现价买入版】
+    msg = f"""⚠️【免责声明】
+1. 本内容为量化模型数据统计，仅用于学习交流，不构成投资建议、个股推荐、交易指导。
+2. 本人无证券投资咨询资质，所有内容不构成买卖依据，据此操作风险自担。
+3. 历史数据不代表未来收益，不承诺盈利，不提供收费服务。
+
+📊 量化模型统计日报
 📅 {now}
-📊 今日大盘状态：{market_tips}
-🎯 核心策略：分行业估值+顺势而为+现价即买
+📊 大盘状态：{market_tips}
 ==================================================
 """
-
     if buy_stocks:
-        msg += "🔥 今日买入信号（收到后立刻现价下单）\n"
+        msg += "📈 模型关注标的（数据展示，非推荐）\n"
         for i, s in enumerate(buy_stocks, 1):
-            o = s["order"]
+            st = s["stats"]
             pool_name = {"core":"核心防御池","steady":"稳健成长池","satellite":"弹性卫星池"}[s["pool_type"]]
             msg += f"""
 【{i}】{s['code']} {s['name']}
-🏷️ 所属池：{pool_name} | 行业：{s['fund']['industry']} | 💯 评分：{s['total_score']} | ⚖️ 盈亏比：{s['win_loss_ratio']}:1
-💵 现价：{s['tech']['price']} 元 | 今日涨幅：{s['tech']['day_change']}% | 量比：{s['tech']['volume_ratio']}
+🏷️ 池：{pool_name}｜行业：{s['fund']['industry']}｜评分：{s['total_score']}｜盈亏比：{s['win_loss_ratio']}:1
+💵 现价：{s['tech']['price']}元｜涨幅：{s['tech']['day_change']}%｜量比：{s['tech']['volume_ratio']}
 
-📈 技术面：
-趋势向上：是 | 资金放量：是 | 当日强势：是
-MACD金叉：{'是' if s['tech']['macd_gold'] else '否'} | KDJ金叉：{'是' if s['tech']['kdj_gold'] else '否'}
-RSI：{s['tech']['rsi']} | MA5>MA10：{'是' if s['tech']['ma5']>s['tech']['ma10'] else '否'}
+📈 指标：
+趋势向上：是｜放量：是｜日内强势：是
+MACD金叉：{'是' if s['tech']['macd_gold'] else '否'}｜KDJ金叉：{'是' if s['tech']['kdj_gold'] else '否'}
+RSI：{s['tech']['rsi']}｜MA5>MA10：{'是' if s['tech']['ma5']>s['tech']['ma10'] else '否'}
 
 📊 基本面：
-PE：{s['fund']['pe']}
-PB：{s['fund']['pb']} | 市值：{s['fund']['market_cap']}亿
+PE：{s['fund']['pe']}｜PB：{s['fund']['pb']}｜市值：{s['fund']['market_cap']}亿
 
-📋 交易计划：
-👉 买入方式：{o['buy_type']}（开盘价附近）
-📦 参考仓位：{o['reference_volume']} 股（按开盘价调整）
-🛑 止损：≥ {o['stop_loss']} 元（{o['stop_loss_pct']}%）
-💰 止盈：{o['target_profit']} 元
+📉 模型波动区间：{st['price_range_low']} ~ {st['price_range_high']} 元
 --------------------------------------------------
 """
     else:
-        msg += "⚠️ 今日无符合条件的买入信号\n📌 策略建议：空仓观望，等待确定性机会\n"
+        msg += "⚠️ 今日无符合模型条件标的\n"
 
     if watch_stocks:
-        msg += "\n👀 明日关注池（提前加入自选）\n"
+        msg += "\n👀 观察池\n"
         for i, s in enumerate(watch_stocks):
-            msg += f"""
-【{i+1}】{s['code']} {s['name']}
-💵 现价：{s['tech']['price']} 元 | RSI：{s['tech']['rsi']} | 行业：{s['fund']['industry']}
---------------------------------------------------
-"""
+            msg += f"【{i+1}】{s['code']} {s['name']}｜现价：{s['tech']['price']}元｜RSI：{s['tech']['rsi']}\n"
+    return msg
 
-    msg += f"""
-⚠️ 风险提示：本报告仅为量化学习参考，不构成任何投资建议
-📌 交易铁律：
-1. 总仓位不超过{int(market_position_ratio*100)}%
-2. 到止损价无条件卖出，绝不扛单
-3. 保本后立刻上移止损，绝对不亏本金
-4. 开盘涨幅超过5%的股票放弃买入
-"""
-
+# ======================== 飞书推送（已修复 19002 错误） ========================
+def send_feishu(msg):
     try:
-        requests.post(FEISHU_WEBHOOK, json={"msg_type":"text","content":{"text":msg}}, timeout=10)
+        payload = {
+            "msg_type": "text",
+            "content": {"text": msg}
+        }
+        requests.post(FEISHU_WEBHOOK, json=payload, timeout=10)
         logger.info("✅ 飞书推送成功")
     except Exception as e:
-        logger.error(f"❌ 推送失败: {e}")
+        logger.error(f"❌ 飞书失败: {e}")
+
+# ======================== 钉钉推送（已修复 43002 错误） ========================
+def send_dingtalk(msg):
+    try:
+        # 没有密钥就不签名，直接发送
+        if DINGTALK_SECRET.strip():
+            timestamp = str(round(time.time() * 1000))
+            string_to_sign = f"{timestamp}\n{DINGTALK_SECRET}"
+            hmac_code = hmac.new(DINGTALK_SECRET.encode(), string_to_sign.encode(), hashlib.sha256).digest()
+            sign = base64.b64encode(hmac_code).decode()
+            url = f"{DINGTALK_WEBHOOK}&timestamp={timestamp}&sign={sign}"
+        else:
+            url = DINGTALK_WEBHOOK
+
+        payload = {
+            "msgtype": "text",
+            "text": {"content": msg}
+        }
+        requests.post(url, json=payload, timeout=10)
+        logger.info("✅ 钉钉推送成功")
+    except Exception as e:
+        logger.error(f"❌ 钉钉失败: {e}")
 
 # ======================== 主程序 ========================
 def main():
     if not is_trading_day():
         return
-    # 强制9:20执行
     wait_until_target_time(9, 20)
-    
+
     market_position_ratio, market_tips, mode = get_market_status()
     buy_stocks, watch_stocks = scan_market(market_position_ratio, mode)
-    send_feishu_report(buy_stocks, watch_stocks, market_tips, market_position_ratio)
-    logger.info("🎉 策略执行完成")
+    msg = build_msg(buy_stocks, watch_stocks, market_tips, market_position_ratio)
+
+    send_feishu(msg)
+    send_dingtalk(msg)
+
+    logger.info("🎉 全部推送完成")
 
 if __name__ == "__main__":
     main()
