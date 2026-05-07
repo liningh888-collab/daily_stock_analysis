@@ -142,15 +142,6 @@ def is_trading_day():
         return False
     return True
 
-def wait_until_target_time(target_hour=9, target_minute=20):
-    logger.info(f"⏳ 等待北京时间 {target_hour}:{target_minute} 执行策略...")
-    while True:
-        now = datetime.now()
-        if now.hour == target_hour and now.minute >= target_minute:
-            logger.info("✅ 已到9:20，开始执行数据统计")
-            break
-        time.sleep(10)
-
 def get_market_status():
     try:
         hs300 = yf.Ticker("000300.SS")
@@ -443,7 +434,7 @@ def build_msg(buy_stocks, watch_stocks, market_tips, market_position_ratio):
 2. 本人无证券投资咨询资质，所有内容不构成买卖依据，据此操作风险自担。
 3. 历史数据不代表未来收益，不承诺盈利，不提供收费服务。
 
-📊 量化模型统计日报
+📊 量化模型统计日报（测试版）
 📅 {now}
 📊 大盘状态：{market_tips}
 ==================================================
@@ -512,12 +503,12 @@ def send_dingtalk(msg):
     except Exception as e:
         logger.error(f"❌ 钉钉失败: {e}")
 
-# ======================== 主程序 ========================
+# ======================== 主程序（去掉等待，直接运行） ========================
 def main():
     if not is_trading_day():
         return
-    wait_until_target_time(9, 20)
 
+    # 测试版：直接运行，不等待9:20
     market_position_ratio, market_tips, mode = get_market_status()
     buy_stocks, watch_stocks = scan_market(market_position_ratio, mode)
     msg = build_msg(buy_stocks, watch_stocks, market_tips, market_position_ratio)
@@ -525,7 +516,7 @@ def main():
     send_feishu(msg)
     send_dingtalk(msg)
 
-    logger.info("🎉 全部推送完成")
+    logger.info("🎉 全部推送完成（测试版）")
 
 if __name__ == "__main__":
     main()
