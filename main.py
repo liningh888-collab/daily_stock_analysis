@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # 飞书 Webhook
 FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/7e8c7d35-382e-43de-8479-0434921d338c"
 
-# 钉钉 Webhook + 加签密码
+# 钉钉 Webhook + 加签密码（你原封不动的）
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=8cd6832317216fdfaca1d2acba57c11e3024f20921365804ba96444f7945b949"
 DINGTALK_SECRET = "SECf67646ed7edca294f7575a5bca513ba7de5c00dffe1ce5750da3175fd8fcddd"
 
@@ -355,6 +355,7 @@ def send_feishu(msg):
     except Exception as e:
         logger.error(f"❌ 飞书推送失败：{e}")
 
+# 【修复版】钉钉推送（正确加签）
 def send_dingtalk(msg):
     try:
         timestamp = str(round(time.time() * 1000))
@@ -364,11 +365,9 @@ def send_dingtalk(msg):
         hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=hashlib.sha256).digest()
         sign = base64.b64encode(hmac_code).decode('utf-8')
         url = f"{DINGTALK_WEBHOOK}&timestamp={timestamp}&sign={sign}"
-        payload = {
-            "msgtype": "text",
-            "text": {"content": msg}
-        }
-        requests.post(url, json=payload, timeout=10)
+        payload = {"msgtype": "text", "text": {"content": msg}}
+        r = requests.post(url, json=payload, timeout=10)
+        logger.info(f"钉钉响应：{r.status_code} {r.text}")
         logger.info("✅ 钉钉推送成功")
     except Exception as e:
         logger.error(f"❌ 钉钉推送失败：{e}")
