@@ -7,7 +7,7 @@ import random
 import hmac
 import hashlib
 import base64
-import urllib.parse  # 👈 这行是关键！你原来的代码有这个
+import urllib.parse
 from datetime import datetime
 import pandas as pd
 import numpy as np
@@ -143,6 +143,16 @@ def is_trading_day():
         return False
     return True
 
+# 👈 新增：每天 9:20 准点等待执行
+def wait_until_0920():
+    logger.info("⏳ 等待 09:20 自动执行...")
+    while True:
+        now = datetime.now()
+        if now.hour == 9 and now.minute >= 20:
+            logger.info("✅ 时间到，开始执行推送")
+            break
+        time.sleep(10)
+
 def get_market_status():
     try:
         hs300 = yf.Ticker("000300.SS")
@@ -259,7 +269,7 @@ def scan(mr, mode):
     watch = sorted(watch, key=lambda x:x["tech"]["rsi"])[:3]
     return res, watch
 
-# ======================== 【你要的最强合规文案】 ========================
+# ======================== 合规文案 ========================
 def build_msg(buy, watch, tips):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     msg = f"""⚠️【终极免责&圈层服务说明】
@@ -312,7 +322,7 @@ RSI：{s['tech']['rsi']}｜MA5>MA10：{'是' if s['tech']['ma5']>s['tech']['ma10
 """
     return msg
 
-# ======================== 推送（100% 可用版） ========================
+# ======================== 推送 ========================
 def send_feishu(msg):
     try:
         requests.post(FEISHU_WEBHOOK, json={"msg_type":"text","content":{"text":msg}}, timeout=10)
@@ -320,7 +330,6 @@ def send_feishu(msg):
     except Exception as e:
         logger.error(f"❌ 飞书失败：{e}")
 
-# 👈 这是你能成功推送的原版钉钉函数！
 def send_dingtalk(msg):
     try:
         timestamp = str(round(time.time() * 1000))
@@ -342,8 +351,15 @@ def send_dingtalk(msg):
 
 # ======================== 主程序 ========================
 def main():
+    # 1. 等待到 9:20
+    wait_until_0920()
+    
+    # 2. 判断是否交易日
     if not is_trading_day():
+        logger.info("❌ 今日休市，不执行")
         return
+    
+    # 3. 原有逻辑不变
     mr, tips, mode = get_market_status()
     buy, watch = scan(mr, mode)
     msg = build_msg(buy, watch, tips)
