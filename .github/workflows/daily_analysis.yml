@@ -1,7 +1,7 @@
 name: 高胜率稳健量化策略
 on:
   schedule:
-    - cron: '15 1 * * 1-5'
+    - cron: '20 1 * * 1-5'  # 👈 只改这里！从 15 改成 20
   workflow_dispatch:
 
 jobs:
