@@ -20,6 +20,5 @@ jobs:
           pip install requests pandas numpy yfinance
       - name: 运行策略推送
         env:
-          CONFIG_CONTENT: ${{ secrets.CONFIG_CONTENT }}
           TZ: Asia/Shanghai
         run: python main.py
