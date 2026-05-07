@@ -143,16 +143,6 @@ def is_trading_day():
         return False
     return True
 
-# 👈 新增：每天 9:20 准点等待执行
-def wait_until_0920():
-    logger.info("⏳ 等待 09:20 自动执行...")
-    while True:
-        now = datetime.now()
-        if now.hour == 9 and now.minute >= 20:
-            logger.info("✅ 时间到，开始执行推送")
-            break
-        time.sleep(10)
-
 def get_market_status():
     try:
         hs300 = yf.Ticker("000300.SS")
@@ -351,15 +341,8 @@ def send_dingtalk(msg):
 
 # ======================== 主程序 ========================
 def main():
-    # 1. 等待到 9:20
-    wait_until_0920()
-    
-    # 2. 判断是否交易日
     if not is_trading_day():
-        logger.info("❌ 今日休市，不执行")
         return
-    
-    # 3. 原有逻辑不变
     mr, tips, mode = get_market_status()
     buy, watch = scan(mr, mode)
     msg = build_msg(buy, watch, tips)
