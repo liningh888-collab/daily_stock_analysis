@@ -12,6 +12,8 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import schedule
+import pytz
 
 # ======================== 全局配置 ========================
 logging.basicConfig(
@@ -227,8 +229,7 @@ def get_stock_data(s, n, t, mr, mode):
         cp = tech["price"]
         if cp>MAX_PRICE: return None
         if tech["volume_ratio"]<mode["volume_ratio_min"]: return None
-        if not tech["is_intraday_strong"]: return None
-        if not tech["is_not_overbought"]: return {"symbol":s,"code":s.replace(".SS","").replace(".SZ",""),"name":n,"pool_type":t,"tech":tech,"fund":get_fundamental_data(s,n),"buy_signal":False,"signal_text":"涨幅过大"}
+        if not tech["is_intraday_strong"]: return {"symbol":s,"code":s.replace(".SS","").replace(".SZ",""),"name":n,"pool_type":t,"tech":tech,"fund":get_fundamental_data(s,n),"buy_signal":False,"signal_text":"涨幅过大"}
         fund = get_fundamental_data(s,n)
         bp = round(cp*1.002,2)
         sl = round(bp - tech["atr"]*1.8,2)
@@ -348,7 +349,18 @@ def main():
     msg = build_msg(buy, watch, tips)
     send_feishu(msg)
     send_dingtalk(msg)
-    logger.info("🎉 全部推送完成")
+    logger.info("🎉 今日选股推送完成")
 
 if __name__ == "__main__":
-    main()
+    # 强制锁定北京时间，不受Clash/系统时区影响
+    bj_tz = pytz.timezone("Asia/Shanghai")
+    scheduler = schedule.Scheduler(tz=bj_tz)
+
+    # 北京时间每天 09:20 自动运行
+    scheduler.every().day.at("09:20").do(main)
+    logger.info("✅ 已锁定北京时间，每日 09:20 自动选股推送，可正常开Clash不影响定时")
+
+    # 循环等待定时任务
+    while True:
+        scheduler.run_pending()
+        time.sleep(30)
