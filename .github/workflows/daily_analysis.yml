@@ -1,8 +1,8 @@
 name: 高胜率稳健量化策略
 on:
   schedule:
-    - cron: '20 1 * * 1-5'  # UTC 01:20 = 北京时间 09:20（周一到周五）
-  workflow_dispatch:  # 允许手动触发测试
+    - cron: '20 1 * * 1-5'  # UTC 01:20 = 北京时间 09:20
+  workflow_dispatch:
 
 jobs:
   analyze:
@@ -17,19 +17,18 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
       
-      - name: 【修改】安装完整依赖（新增 ntplib）
+      - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas numpy yfinance schedule pytz ntplib
+          pip install requests pandas numpy yfinance pytz ntplib
       
-      - name: 【新增】验证北京时间（调试用，可删除）
+      - name: 验证北京时间
         env:
           TZ: Asia/Shanghai
         run: |
-          echo "当前系统时间（UTC）：$(date)"
           echo "当前北京时间：$(date -d 'TZ="Asia/Shanghai"' '+%Y-%m-%d %H:%M:%S')"
       
       - name: 运行策略推送
         env:
-          TZ: Asia/Shanghai  # 强制锁定上海时区
+          TZ: Asia/Shanghai
         run: python main.py
