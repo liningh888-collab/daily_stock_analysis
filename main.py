@@ -28,7 +28,7 @@ FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/7e8c7d35-382e-43d
 
 # 钉钉配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=8cd6832317216fdfaca1d2acba57c11e3024f20921365804ba96444f7945b949"
-DINGTALK_SECRET = "SECf67646ed7edca294f7575a5bca513ba7de5c00dffe1ce570da3175fd8fcdddc"
+DINGTALK_SECRET = "SECf67646ed7edca294f7575a5bca513ba7de5c00dffe1ce5750da3175fd8fcdddc"
 
 # ======================== NTP网络时间校准 ========================
 NTP_SERVERS = [
@@ -292,7 +292,7 @@ def scan(mr, mode):
     watch = sorted(watch, key=lambda x:x["tech"]["rsi"])[:3]
     return res, watch
 
-# ======================== ✅ 已修改：终极合规文案（关键） ========================
+# ======================== 合规文案（已修复语法） ========================
 def build_msg(buy, watch, tips):
     now = get_standard_now().strftime("%Y-%m-%d %H:%M:%S")
     msg = f"""==================================================
@@ -323,4 +323,95 @@ def build_msg(buy, watch, tips):
 💵 行情数据：现价{s['tech']['price']}元｜涨幅{s['tech']['day_change']}%｜量比{s['tech']['volume_ratio']}
 📈 技术指标（仅历史数据）：RSI{s['tech']['rsi']}｜PE{s['fund']['pe']}｜PB{s['fund']['pb']}
 📉 算法统计区间：{p['price_range_low']} ~ {p['price_range_high']} 元
-------------------------------------------------
+--------------------------------------------------
+"""
+    else:
+        msg += "⚠️ 今日无符合算法条件的数据记录\n"
+
+    if watch:
+        msg += "\n👀 程序观察池数据（仅历史行情）\n"
+        for i, s in enumerate(watch):
+            msg += f"【数据{i+1}】{s['code']} {s['name']}｜现价：{s['tech']['price']}元｜RSI：{s['tech']['rsi']}\n"
+
+    msg += """
+==================================================
+💡 重要提醒
+1. 本内容为量化算法自动输出，非个股推荐
+2. 禁止跟单交易、禁止对外传播、禁止用于实盘决策
+3. 股市有风险，投资需谨慎，数据仅供技术学习
+==================================================
+"""
+    return msg
+
+# ======================== 推送函数 ========================
+def send_feishu(msg):
+    proxies = {"http": None, "https": None}
+    for retry in range(3):
+        try:
+            resp = requests.post(
+                FEISHU_WEBHOOK,
+                json={"msg_type": "text", "content": {"text": msg}},
+                timeout=10,
+                proxies=proxies
+            )
+            if resp.status_code == 200 and resp.json().get("code") == 0:
+                logger.info("✅ 飞书推送成功")
+                return
+        except Exception as e:
+            logger.warning(f"⚠️ 飞书推送重试 {retry+1}/3: {e}")
+            time.sleep(2)
+    logger.error("❌ 飞书推送最终失败")
+
+def send_dingtalk(msg):
+    proxies = {"http": None, "https": None}
+    for retry in range(3):
+        try:
+            timestamp = str(round(time.time() * 1000))
+            secret_enc = DINGTALK_SECRET.encode('utf-8')
+            string_to_sign = f"{timestamp}\n{DINGTALK_SECRET}"
+            string_to_sign_enc = string_to_sign.encode('utf-8')
+            hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=hashlib.sha256).digest()
+            sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
+            
+            url = f"{DINGTALK_WEBHOOK}&timestamp={timestamp}&sign={sign}"
+            message = {
+                "msgtype": "text",
+                "text": {"content": msg}
+            }
+            resp = requests.post(url, json=message, timeout=10, proxies=proxies)
+            if resp.status_code == 200 and resp.json().get("errcode") == 0:
+                logger.info("✅ 钉钉推送成功")
+                return
+        except Exception as e:
+            logger.warning(f"⚠️ 钉钉推送重试 {retry+1}/3: {e}")
+            time.sleep(2)
+    logger.error("❌ 钉钉推送最终失败")
+
+# ======================== 主逻辑 ========================
+def main():
+    if not is_trading_day():
+        logger.info("🏁 非交易日，程序退出")
+        return
+    
+    logger.info("🚀 开始运行策略...")
+    mr, tips, mode = get_market_status()
+    buy, watch = scan(mr, mode)
+    msg = build_msg(buy, watch, tips)
+    
+    send_feishu(msg)
+    send_dingtalk(msg)
+    
+    logger.info("🎉 今日数据推送完成")
+
+# ======================== 启动 ========================
+if __name__ == "__main__":
+    logger.info("="*50)
+    logger.info("🚀 GitHub Actions 触发，策略启动")
+    logger.info("="*50)
+    
+    sync_ntp_time()
+    main()
+    
+    logger.info("="*50)
+    logger.info("🏁 程序运行结束")
+    logger.info("="*50)
