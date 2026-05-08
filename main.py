@@ -12,9 +12,8 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 import yfinance as yf
-import schedule
 import pytz
-import ntplib  # 新增：NTP时间同步依赖
+import ntplib
 
 # ======================== 全局配置 ========================
 logging.basicConfig(
@@ -31,9 +30,9 @@ FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/7e8c7d35-382e-43d
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=8cd6832317216fdfaca1d2acba57c11e3024f20921365804ba96444f7945b949"
 DINGTALK_SECRET = "SECf67646ed7edca294f7575a5bca513ba7de5c00dffe1ce5750da3175fd8fcdddc"
 
-# ======================== 【新增】NTP网络时间配置 ========================
+# ======================== NTP网络时间校准（核心） ========================
 NTP_SERVERS = [
-    "ntp.ntsc.ac.cn",    # 国家授时中心
+    "ntp.ntsc.ac.cn",    # 国家授时中心（优先）
     "ntp.aliyun.com",     # 阿里云
     "ntp.tencent.com"     # 腾讯云
 ]
@@ -57,12 +56,12 @@ def sync_ntp_time():
     return False
 
 def get_standard_now():
-    """获取标准北京时间"""
+    """获取标准北京时间（datetime对象）"""
     standard_timestamp = time.time() + TIME_OFFSET
     bj_tz = pytz.timezone("Asia/Shanghai")
     return datetime.fromtimestamp(standard_timestamp, tz=bj_tz)
 
-# ======================== 核心参数 ========================
+# ======================== 核心交易参数 ========================
 SELECTION_TOP_N = 3
 HIST_DAYS = 90
 CAPITAL = 10000
@@ -89,7 +88,7 @@ WEAK_MODE = {
     "trend_up_required": False
 }
 
-# ======================== 行业估值 ========================
+# ======================== 行业估值规则 ========================
 INDUSTRY_PE_RULES = {
     "银行": {"pe_max": 12, "pb_max": 1.2},
     "保险": {"pe_max": 15, "pb_max": 2.0},
@@ -159,9 +158,10 @@ MY_STOCKS = {
     "600759.SS": "洲际油气", "002132.SZ": "恒星科技"
 }
 
-# ======================== 工具 ========================
+# ======================== 工具函数 ========================
 def is_trading_day():
-    today = get_standard_now()  # 修改：使用标准时间
+    """判断是否为交易日（基于标准北京时间）"""
+    today = get_standard_now()
     if today.weekday() > 4:
         logger.info("❌ 周末休市")
         return False
@@ -178,6 +178,7 @@ def is_trading_day():
     return True
 
 def get_market_status():
+    """获取大盘状态（基于沪深300）"""
     try:
         hs300 = yf.Ticker("000300.SS")
         df = hs300.history(period="60d", timeout=10)
@@ -199,15 +200,18 @@ def get_market_status():
             return 0.5, f"震荡市，模型仓位参考上限50% [{name}]", mode
         else:
             return 0.3, f"下跌市，模型仓位参考上限30% [{name}]", mode
-    except:
+    except Exception as e:
+        logger.warning(f"⚠️ 大盘状态获取异常: {e}")
         return 0.3, "大盘状态异常，严控观察", WEAK_MODE
 
 def calc_atr(df, period=14):
+    """计算ATR（平均真实波幅）"""
     high, low, close = df["High"], df["Low"], df["Close"]
     tr = pd.concat([high-low, abs(high-close.shift(1)), abs(low-close.shift(1))], axis=1).max(axis=1)
     return round(tr.rolling(period).mean().iloc[-1], 2)
 
 def calc_technical_indicators(df, mode):
+    """计算技术指标"""
     close, high, low, volume, open_ = df["Close"], df["High"], df["Low"], df["Volume"], df["Open"]
     ma5, ma10, ma20, ma60 = close.rolling(5).mean(), close.rolling(10).mean(), close.rolling(20).mean(), close.rolling(60).mean()
     ma5_vol = volume.rolling(5).mean()
@@ -238,6 +242,7 @@ def calc_technical_indicators(df, mode):
     }
 
 def get_fundamental_data(s, n):
+    """获取基本面数据"""
     try:
         info = yf.Ticker(s).info
         pe = info.get("trailingPE",999)
@@ -250,10 +255,12 @@ def get_fundamental_data(s, n):
         ir = INDUSTRY_PE_RULES[ik]
         ok = (pe<ir["pe_max"] and pb<ir["pb_max"] and mc>FUNDAMENTAL_RED_LINE["market_cap_min"] and FUNDAMENTAL_RED_LINE["turnover_min"]<tur<FUNDAMENTAL_RED_LINE["turnover_max"])
         return {"pe":round(pe,2) if pe<999 else 999,"pb":round(pb,2) if pb<999 else 999,"market_cap":mc,"turnover":tur,"industry":ik,"fund_pass":ok}
-    except:
+    except Exception as e:
+        logger.debug(f"⚠️ 基本面数据获取失败 [{n}]: {e}")
         return {"pe":999,"pb":999,"market_cap":0,"turnover":0,"industry":"其他","fund_pass":False}
 
 def get_stock_data(s, n, t, mr, mode):
+    """获取单只股票的完整数据"""
     try:
         df = yf.Ticker(s).history(period=f"{HIST_DAYS}d", timeout=10)
         if len(df)<20: return None
@@ -275,10 +282,12 @@ def get_stock_data(s, n, t, mr, mode):
         pw = {"core":1.5,"steady":1.2,"satellite":1.0}[t]
         score = round((((tech["trend_up"] and tech["volume_enlarge"])*2.5)+sum([tech["macd_gold"],tech["kdj_gold"],30<tech["rsi"]<70,tech["ma5"]>tech["ma10"]])*1.2)*0.45 + (3 if fund["pe"]<15 else 2 if fund["pe"]<30 else 1)*0.25 + (wlr/4)*0.3*pw,2)
         return {"symbol":s,"code":s.replace(".SS","").replace(".SZ",""),"name":n,"pool_type":t,"tech":tech,"fund":fund,"win_loss_ratio":wlr,"total_score":score,"buy_signal":True,"stats":{"price_range_low":sl,"price_range_high":tp,"volatility_pct":round(ls*100,1),"win_loss_ratio":wlr}}
-    except:
+    except Exception as e:
+        logger.debug(f"⚠️ 股票数据获取失败 [{n}]: {e}")
         return None
 
 def scan(mr, mode):
+    """扫描全股票池"""
     res, watch = [], []
     pool = {**MY_STOCKS,**CORE_POOL,**STEADY_POOL,**SATELLITE_POOL}
     for s,n in pool.items():
@@ -287,14 +296,15 @@ def scan(mr, mode):
         if stock:
             if stock["buy_signal"]: res.append(stock)
             else: watch.append(stock)
-        time.sleep(0.2)
+        time.sleep(0.15)  # 稍微降低请求频率，避免GitHub Actions被限流
     res = sorted(res, key=lambda x:x["total_score"], reverse=True)[:3]
     watch = sorted(watch, key=lambda x:x["tech"]["rsi"])[:3]
     return res, watch
 
-# ======================== 合规文案 ========================
+# ======================== 合规文案生成 ========================
 def build_msg(buy, watch, tips):
-    now = get_standard_now().strftime("%Y-%m-%d %H:%M:%S")  # 修改：使用标准时间
+    """生成推送文案"""
+    now = get_standard_now().strftime("%Y-%m-%d %H:%M:%S")
     msg = f"""⚠️【终极免责&圈层服务说明】
 1. 本圈层收取的是大数据算力使用费、机器人算法运行成本、圈层准入门槛费，绝非证券投资咨询费、荐股费、交易指导费。
 2. 以下所有内容均为Python量化程序全自动无人工干预爬取公开行情、算法运算输出，
@@ -320,7 +330,7 @@ def build_msg(buy, watch, tips):
 💵 现价：{s['tech']['price']}元｜涨幅：{s['tech']['day_change']}%｜量比：{s['tech']['volume_ratio']}
 
 📈 指标：
-趋势向上：是｜放量：是｜日内强势：是
+趋势向上：{'是' if s['tech']['trend_up'] else '否'}｜放量：{'是' if s['tech']['volume_enlarge'] else '否'}｜日内强势：{'是' if s['tech']['is_intraday_strong'] else '否'}
 MACD金叉：{'是' if s['tech']['macd_gold'] else '否'}｜KDJ金叉：{'是' if s['tech']['kdj_gold'] else '否'}
 RSI：{s['tech']['rsi']}｜MA5>MA10：{'是' if s['tech']['ma5']>s['tech']['ma10'] else '否'}
 
@@ -345,9 +355,9 @@ RSI：{s['tech']['rsi']}｜MA5>MA10：{'是' if s['tech']['ma5']>s['tech']['ma10
 """
     return msg
 
-# ======================== 【优化】推送函数（强制直连+重试） ========================
+# ======================== 推送函数（强制直连+重试） ========================
 def send_feishu(msg):
-    # 强制直连，绕过Clash
+    """发送飞书消息（强制绕过代理）"""
     proxies = {"http": None, "https": None}
     for retry in range(3):
         try:
@@ -366,12 +376,12 @@ def send_feishu(msg):
     logger.error("❌ 飞书推送最终失败")
 
 def send_dingtalk(msg):
-    # 强制直连，绕过Clash
+    """发送钉钉消息（强制绕过代理+修复签名）"""
     proxies = {"http": None, "https": None}
     for retry in range(3):
         try:
             timestamp = str(round(time.time() * 1000))
-            # 【修复】正确的签名计算逻辑
+            # 正确的签名计算逻辑
             secret_enc = DINGTALK_SECRET.encode('utf-8')
             string_to_sign = f"{timestamp}\n{DINGTALK_SECRET}"
             string_to_sign_enc = string_to_sign.encode('utf-8')
@@ -392,30 +402,36 @@ def send_dingtalk(msg):
             time.sleep(2)
     logger.error("❌ 钉钉推送最终失败")
 
-# ======================== 主程序 ========================
+# ======================== 主逻辑 ========================
 def main():
+    """主程序入口"""
     if not is_trading_day():
+        logger.info("🏁 非交易日，程序退出")
         return
+    
+    logger.info("🚀 开始运行策略...")
     mr, tips, mode = get_market_status()
     buy, watch = scan(mr, mode)
     msg = build_msg(buy, watch, tips)
+    
+    # 发送推送
     send_feishu(msg)
     send_dingtalk(msg)
+    
     logger.info("🎉 今日选股推送完成")
 
+# ======================== GitHub Actions 启动入口 ========================
 if __name__ == "__main__":
-    # 启动时先同步网络时间
+    logger.info("="*50)
+    logger.info("🚀 GitHub Actions 触发，策略启动")
+    logger.info("="*50)
+    
+    # 1. 先同步网络时间
     sync_ntp_time()
     
-    # 锁定北京时间时区
-    bj_tz = pytz.timezone("Asia/Shanghai")
-    scheduler = schedule.Scheduler(tz=bj_tz)
-
-    # 北京时间每天 09:20 自动运行
-    scheduler.every().day.at("09:20").do(main)
-    logger.info("✅ 已启动：NTP时间校准+强制直连推送，每日09:20准时运行，Clash不影响")
-
-    # 循环等待定时任务
-    while True:
-        scheduler.run_pending()
-        time.sleep(30)
+    # 2. 直接运行主逻辑
+    main()
+    
+    logger.info("="*50)
+    logger.info("🏁 程序运行结束")
+    logger.info("="*50)
