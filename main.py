@@ -28,18 +28,17 @@ FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/7e8c7d35-382e-43d
 
 # 钉钉配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=8cd6832317216fdfaca1d2acba57c11e3024f20921365804ba96444f7945b949"
-DINGTALK_SECRET = "SECf67646ed7edca294f7575a5bca513ba7de5c00dffe1ce5750da3175fd8fcdddc"
+DINGTALK_SECRET = "SECf67646ed7edca294f7575a5bca513ba7de5c00dffe1ce570da3175fd8fcdddc"
 
-# ======================== NTP网络时间校准（核心） ========================
+# ======================== NTP网络时间校准 ========================
 NTP_SERVERS = [
-    "ntp.ntsc.ac.cn",    # 国家授时中心（优先）
-    "ntp.aliyun.com",     # 阿里云
-    "ntp.tencent.com"     # 腾讯云
+    "ntp.ntsc.ac.cn",
+    "ntp.aliyun.com",
+    "ntp.tencent.com"
 ]
-TIME_OFFSET = 0.0  # 网络时间与本地时间的偏差（秒）
+TIME_OFFSET = 0.0
 
 def sync_ntp_time():
-    """同步标准北京时间"""
     global TIME_OFFSET
     for server in NTP_SERVERS:
         try:
@@ -56,12 +55,11 @@ def sync_ntp_time():
     return False
 
 def get_standard_now():
-    """获取标准北京时间（datetime对象）"""
     standard_timestamp = time.time() + TIME_OFFSET
     bj_tz = pytz.timezone("Asia/Shanghai")
     return datetime.fromtimestamp(standard_timestamp, tz=bj_tz)
 
-# ======================== 核心交易参数 ========================
+# ======================== 核心参数 ========================
 SELECTION_TOP_N = 3
 HIST_DAYS = 90
 CAPITAL = 10000
@@ -160,7 +158,6 @@ MY_STOCKS = {
 
 # ======================== 工具函数 ========================
 def is_trading_day():
-    """判断是否为交易日（基于标准北京时间）"""
     today = get_standard_now()
     if today.weekday() > 4:
         logger.info("❌ 周末休市")
@@ -178,7 +175,6 @@ def is_trading_day():
     return True
 
 def get_market_status():
-    """获取大盘状态（基于沪深300）"""
     try:
         hs300 = yf.Ticker("000300.SS")
         df = hs300.history(period="60d", timeout=10)
@@ -205,13 +201,11 @@ def get_market_status():
         return 0.3, "大盘状态异常，严控观察", WEAK_MODE
 
 def calc_atr(df, period=14):
-    """计算ATR（平均真实波幅）"""
     high, low, close = df["High"], df["Low"], df["Close"]
     tr = pd.concat([high-low, abs(high-close.shift(1)), abs(low-close.shift(1))], axis=1).max(axis=1)
     return round(tr.rolling(period).mean().iloc[-1], 2)
 
 def calc_technical_indicators(df, mode):
-    """计算技术指标"""
     close, high, low, volume, open_ = df["Close"], df["High"], df["Low"], df["Volume"], df["Open"]
     ma5, ma10, ma20, ma60 = close.rolling(5).mean(), close.rolling(10).mean(), close.rolling(20).mean(), close.rolling(60).mean()
     ma5_vol = volume.rolling(5).mean()
@@ -242,7 +236,6 @@ def calc_technical_indicators(df, mode):
     }
 
 def get_fundamental_data(s, n):
-    """获取基本面数据"""
     try:
         info = yf.Ticker(s).info
         pe = info.get("trailingPE",999)
@@ -260,7 +253,6 @@ def get_fundamental_data(s, n):
         return {"pe":999,"pb":999,"market_cap":0,"turnover":0,"industry":"其他","fund_pass":False}
 
 def get_stock_data(s, n, t, mr, mode):
-    """获取单只股票的完整数据"""
     try:
         df = yf.Ticker(s).history(period=f"{HIST_DAYS}d", timeout=10)
         if len(df)<20: return None
@@ -287,7 +279,6 @@ def get_stock_data(s, n, t, mr, mode):
         return None
 
 def scan(mr, mode):
-    """扫描全股票池"""
     res, watch = [], []
     pool = {**MY_STOCKS,**CORE_POOL,**STEADY_POOL,**SATELLITE_POOL}
     for s,n in pool.items():
@@ -296,142 +287,40 @@ def scan(mr, mode):
         if stock:
             if stock["buy_signal"]: res.append(stock)
             else: watch.append(stock)
-        time.sleep(0.15)  # 稍微降低请求频率，避免GitHub Actions被限流
+        time.sleep(0.15)
     res = sorted(res, key=lambda x:x["total_score"], reverse=True)[:3]
     watch = sorted(watch, key=lambda x:x["tech"]["rsi"])[:3]
     return res, watch
 
-# ======================== 合规文案生成 ========================
+# ======================== ✅ 已修改：终极合规文案（关键） ========================
 def build_msg(buy, watch, tips):
-    """生成推送文案"""
     now = get_standard_now().strftime("%Y-%m-%d %H:%M:%S")
-    msg = f"""⚠️【终极免责&圈层服务说明】
-1. 本圈层收取的是大数据算力使用费、机器人算法运行成本、圈层准入门槛费，绝非证券投资咨询费、荐股费、交易指导费。
-2. 以下所有内容均为Python量化程序全自动无人工干预爬取公开行情、算法运算输出，
-   仅作圈层内部技术学习、量化模型逻辑复盘交流使用，不构成任何投资建议、个股推荐、买卖点位指导。
-3. 本人无任何证券投资咨询从业资质，不开展投顾业务，不承诺收益、不保证胜率，历史数据不代表未来走势。
-4. 所有展示的股票代码、名称、价格、指标、区间仅为程序原始数据记录，禁止对外转发、禁止跟单实盘操作，
-   任何人自行据此交易盈亏自负，与本人及圈层无关。
-5. 股市有风险，投资需谨慎，圈层内严禁询问个股买卖、止损止盈等操作类问题。
-
-📊 大数据AI算力量化模型日报（圈层专属）
-📅 {now}
+    msg = f"""==================================================
+【🤖 量化算法自动数据输出 · 纯历史回测记录】
+📅 输出时间：{now}
 📊 大盘状态：{tips}
 ==================================================
-📈 模型自动筛选标的（程序原始数据记录，非人工推荐）
+⚠️ 法律合规声明（务必阅读）
+1. 本内容为 Python 量化程序**全自动运算输出的公开行情数据记录**，属于历史统计信息，
+   无任何人工干预、无人工筛选、无人工点评、**不构成任何投资建议**。
+2. 本社群收取费用为：**算法算力使用费 + 数据订阅费 + 圈层准入服务费**，
+   与证券投资咨询、荐股、买卖指导无关，无任何收益承诺。
+3. 所有数据仅用于**量化技术学习、算法逻辑验证、历史数据复盘**。
+4. 严禁任何个人依据本数据进行实盘交易，否则一切盈亏自行承担。
+5. 本人不提供任何个股操作指导、买卖建议，不开展任何证券投资咨询业务。
+
+==================================================
+【📊 程序自动筛选标的 · 纯数据展示】
 """
     pool_name_map = {"core":"核心防御池","steady":"稳健成长池","satellite":"弹性卫星池"}
     if buy:
         for i, s in enumerate(buy,1):
             p = s["stats"]
             msg += f"""
-【{i}】{s['code']} {s['name']}
-🏷️ 池：{pool_name_map[s['pool_type']]}｜行业：{s['fund']['industry']}｜评分：{s['total_score']}｜盈亏比：{s['win_loss_ratio']}:1
-💵 现价：{s['tech']['price']}元｜涨幅：{s['tech']['day_change']}%｜量比：{s['tech']['volume_ratio']}
-
-📈 指标：
-趋势向上：{'是' if s['tech']['trend_up'] else '否'}｜放量：{'是' if s['tech']['volume_enlarge'] else '否'}｜日内强势：{'是' if s['tech']['is_intraday_strong'] else '否'}
-MACD金叉：{'是' if s['tech']['macd_gold'] else '否'}｜KDJ金叉：{'是' if s['tech']['kdj_gold'] else '否'}
-RSI：{s['tech']['rsi']}｜MA5>MA10：{'是' if s['tech']['ma5']>s['tech']['ma10'] else '否'}
-
-📊 基本面：PE：{s['fund']['pe']}｜PB：{s['fund']['pb']}｜市值：{s['fund']['market_cap']}亿
-📉 模型区间：{p['price_range_low']} ~ {p['price_range_high']} 元
---------------------------------------------------
-"""
-    else:
-        msg += "⚠️ 今日无符合模型条件标的\n"
-
-    if watch:
-        msg += "\n👀 观察池\n"
-        for i, s in enumerate(watch):
-            msg += f"【{i+1}】{s['code']} {s['name']}｜现价：{s['tech']['price']}元｜RSI：{s['tech']['rsi']}\n"
-
-    msg += """
-==================================================
-💡 圈层规则重申：
-1. 付费仅为大数据算力+圈层准入服务，不属于证券投顾服务
-2. 所有内容为程序自动输出，无人工荐股、无操作指导
-3. 禁止跟单、禁止实盘依据、禁止对外转发
-"""
-    return msg
-
-# ======================== 推送函数（强制直连+重试） ========================
-def send_feishu(msg):
-    """发送飞书消息（强制绕过代理）"""
-    proxies = {"http": None, "https": None}
-    for retry in range(3):
-        try:
-            resp = requests.post(
-                FEISHU_WEBHOOK,
-                json={"msg_type": "text", "content": {"text": msg}},
-                timeout=10,
-                proxies=proxies
-            )
-            if resp.status_code == 200 and resp.json().get("code") == 0:
-                logger.info("✅ 飞书推送成功")
-                return
-        except Exception as e:
-            logger.warning(f"⚠️ 飞书推送重试 {retry+1}/3: {e}")
-            time.sleep(2)
-    logger.error("❌ 飞书推送最终失败")
-
-def send_dingtalk(msg):
-    """发送钉钉消息（强制绕过代理+修复签名）"""
-    proxies = {"http": None, "https": None}
-    for retry in range(3):
-        try:
-            timestamp = str(round(time.time() * 1000))
-            # 正确的签名计算逻辑
-            secret_enc = DINGTALK_SECRET.encode('utf-8')
-            string_to_sign = f"{timestamp}\n{DINGTALK_SECRET}"
-            string_to_sign_enc = string_to_sign.encode('utf-8')
-            hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=hashlib.sha256).digest()
-            sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
-            
-            url = f"{DINGTALK_WEBHOOK}&timestamp={timestamp}&sign={sign}"
-            message = {
-                "msgtype": "text",
-                "text": {"content": msg}
-            }
-            resp = requests.post(url, json=message, timeout=10, proxies=proxies)
-            if resp.status_code == 200 and resp.json().get("errcode") == 0:
-                logger.info("✅ 钉钉推送成功")
-                return
-        except Exception as e:
-            logger.warning(f"⚠️ 钉钉推送重试 {retry+1}/3: {e}")
-            time.sleep(2)
-    logger.error("❌ 钉钉推送最终失败")
-
-# ======================== 主逻辑 ========================
-def main():
-    """主程序入口"""
-    if not is_trading_day():
-        logger.info("🏁 非交易日，程序退出")
-        return
-    
-    logger.info("🚀 开始运行策略...")
-    mr, tips, mode = get_market_status()
-    buy, watch = scan(mr, mode)
-    msg = build_msg(buy, watch, tips)
-    
-    # 发送推送
-    send_feishu(msg)
-    send_dingtalk(msg)
-    
-    logger.info("🎉 今日选股推送完成")
-
-# ======================== GitHub Actions 启动入口 ========================
-if __name__ == "__main__":
-    logger.info("="*50)
-    logger.info("🚀 GitHub Actions 触发，策略启动")
-    logger.info("="*50)
-    
-    # 1. 先同步网络时间
-    sync_ntp_time()
-    
-    # 2. 直接运行主逻辑
-    main()
-    
-    logger.info("="*50)
-    logger.info("🏁 程序运行结束")
-    logger.info("="*50)
+【数据{i}】{s['code']} {s['name']}
+🏷️ 分类：{pool_name_map[s['pool_type']]}｜行业：{s['fund']['industry']}
+📊 算法评分：{s['total_score']}｜盈亏比：{s['win_loss_ratio']}:1
+💵 行情数据：现价{s['tech']['price']}元｜涨幅{s['tech']['day_change']}%｜量比{s['tech']['volume_ratio']}
+📈 技术指标（仅历史数据）：RSI{s['tech']['rsi']}｜PE{s['fund']['pe']}｜PB{s['fund']['pb']}
+📉 算法统计区间：{p['price_range_low']} ~ {p['price_range_high']} 元
+------------------------------------------------
