@@ -14,6 +14,7 @@ import numpy as np
 import yfinance as yf
 import schedule
 import pytz
+import ntplib  # 新增：NTP时间同步依赖
 
 # ======================== 全局配置 ========================
 logging.basicConfig(
@@ -26,9 +27,40 @@ logger = logging.getLogger(__name__)
 # 飞书 Webhook
 FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/7e8c7d35-382e-43de-8479-0434921d338c"
 
-# 钉钉配置（你可用的）
+# 钉钉配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=8cd6832317216fdfaca1d2acba57c11e3024f20921365804ba96444f7945b949"
 DINGTALK_SECRET = "SECf67646ed7edca294f7575a5bca513ba7de5c00dffe1ce5750da3175fd8fcdddc"
+
+# ======================== 【新增】NTP网络时间配置 ========================
+NTP_SERVERS = [
+    "ntp.ntsc.ac.cn",    # 国家授时中心
+    "ntp.aliyun.com",     # 阿里云
+    "ntp.tencent.com"     # 腾讯云
+]
+TIME_OFFSET = 0.0  # 网络时间与本地时间的偏差（秒）
+
+def sync_ntp_time():
+    """同步标准北京时间"""
+    global TIME_OFFSET
+    for server in NTP_SERVERS:
+        try:
+            client = ntplib.NTPClient()
+            response = client.request(server, version=3, timeout=3)
+            TIME_OFFSET = response.tx_time - time.time()
+            logger.info(f"✅ 时间同步成功 [{server}]，偏差: {TIME_OFFSET:.3f}秒")
+            return True
+        except Exception as e:
+            logger.warning(f"⚠️ 时间同步失败 [{server}]: {str(e)}")
+            continue
+    logger.error("❌ 所有NTP服务器同步失败，将使用本地时间")
+    TIME_OFFSET = 0.0
+    return False
+
+def get_standard_now():
+    """获取标准北京时间"""
+    standard_timestamp = time.time() + TIME_OFFSET
+    bj_tz = pytz.timezone("Asia/Shanghai")
+    return datetime.fromtimestamp(standard_timestamp, tz=bj_tz)
 
 # ======================== 核心参数 ========================
 SELECTION_TOP_N = 3
@@ -129,7 +161,7 @@ MY_STOCKS = {
 
 # ======================== 工具 ========================
 def is_trading_day():
-    today = datetime.now()
+    today = get_standard_now()  # 修改：使用标准时间
     if today.weekday() > 4:
         logger.info("❌ 周末休市")
         return False
@@ -262,7 +294,7 @@ def scan(mr, mode):
 
 # ======================== 合规文案 ========================
 def build_msg(buy, watch, tips):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = get_standard_now().strftime("%Y-%m-%d %H:%M:%S")  # 修改：使用标准时间
     msg = f"""⚠️【终极免责&圈层服务说明】
 1. 本圈层收取的是大数据算力使用费、机器人算法运行成本、圈层准入门槛费，绝非证券投资咨询费、荐股费、交易指导费。
 2. 以下所有内容均为Python量化程序全自动无人工干预爬取公开行情、算法运算输出，
@@ -313,32 +345,52 @@ RSI：{s['tech']['rsi']}｜MA5>MA10：{'是' if s['tech']['ma5']>s['tech']['ma10
 """
     return msg
 
-# ======================== 推送 ========================
+# ======================== 【优化】推送函数（强制直连+重试） ========================
 def send_feishu(msg):
-    try:
-        requests.post(FEISHU_WEBHOOK, json={"msg_type":"text","content":{"text":msg}}, timeout=10)
-        logger.info("✅ 飞书推送成功")
-    except Exception as e:
-        logger.error(f"❌ 飞书失败：{e}")
+    # 强制直连，绕过Clash
+    proxies = {"http": None, "https": None}
+    for retry in range(3):
+        try:
+            resp = requests.post(
+                FEISHU_WEBHOOK,
+                json={"msg_type": "text", "content": {"text": msg}},
+                timeout=10,
+                proxies=proxies
+            )
+            if resp.status_code == 200 and resp.json().get("code") == 0:
+                logger.info("✅ 飞书推送成功")
+                return
+        except Exception as e:
+            logger.warning(f"⚠️ 飞书推送重试 {retry+1}/3: {e}")
+            time.sleep(2)
+    logger.error("❌ 飞书推送最终失败")
 
 def send_dingtalk(msg):
-    try:
-        timestamp = str(round(time.time() * 1000))
-        secret_enc = DINGTALK_SECRET.encode('utf-8')
-        string_to_sign = '{}\n{}'.format(timestamp, DINGTALK_SECRET)
-        string_to_sign_enc = string_to_sign.encode('utf-8')
-        hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=hashlib.sha256).digest()
-        sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
-        url = f"{DINGTALK_WEBHOOK}&timestamp={timestamp}&sign={sign}"
-        
-        message = {
-            "msgtype": "text",
-            "text": {"content": msg}
-        }
-        resp = requests.post(url, json=message)
-        logger.info("✅ 钉钉推送成功")
-    except Exception as e:
-        logger.error(f"❌ 钉钉失败：{e}")
+    # 强制直连，绕过Clash
+    proxies = {"http": None, "https": None}
+    for retry in range(3):
+        try:
+            timestamp = str(round(time.time() * 1000))
+            # 【修复】正确的签名计算逻辑
+            secret_enc = DINGTALK_SECRET.encode('utf-8')
+            string_to_sign = f"{timestamp}\n{DINGTALK_SECRET}"
+            string_to_sign_enc = string_to_sign.encode('utf-8')
+            hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=hashlib.sha256).digest()
+            sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
+            
+            url = f"{DINGTALK_WEBHOOK}&timestamp={timestamp}&sign={sign}"
+            message = {
+                "msgtype": "text",
+                "text": {"content": msg}
+            }
+            resp = requests.post(url, json=message, timeout=10, proxies=proxies)
+            if resp.status_code == 200 and resp.json().get("errcode") == 0:
+                logger.info("✅ 钉钉推送成功")
+                return
+        except Exception as e:
+            logger.warning(f"⚠️ 钉钉推送重试 {retry+1}/3: {e}")
+            time.sleep(2)
+    logger.error("❌ 钉钉推送最终失败")
 
 # ======================== 主程序 ========================
 def main():
@@ -352,13 +404,16 @@ def main():
     logger.info("🎉 今日选股推送完成")
 
 if __name__ == "__main__":
-    # 强制锁定北京时间，不受Clash/系统时区影响
+    # 启动时先同步网络时间
+    sync_ntp_time()
+    
+    # 锁定北京时间时区
     bj_tz = pytz.timezone("Asia/Shanghai")
     scheduler = schedule.Scheduler(tz=bj_tz)
 
     # 北京时间每天 09:20 自动运行
     scheduler.every().day.at("09:20").do(main)
-    logger.info("✅ 已锁定北京时间，每日 09:20 自动选股推送，可正常开Clash不影响定时")
+    logger.info("✅ 已启动：NTP时间校准+强制直连推送，每日09:20准时运行，Clash不影响")
 
     # 循环等待定时任务
     while True:
