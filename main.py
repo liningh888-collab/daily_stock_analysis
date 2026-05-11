@@ -177,7 +177,7 @@ def is_trading_day():
 def get_market_status():
     try:
         hs300 = yf.Ticker("000300.SS")
-        df = hs300.history(period="60d", timeout=10)
+        df = hs300.history(period="60d", timeout=5)
         if len(df) < 30:
             return 0.5, "大盘数据不足，谨慎观察", NORMAL_MODE
         close = df["Close"].astype(float)
@@ -254,7 +254,7 @@ def get_fundamental_data(s, n):
 
 def get_stock_data(s, n, t, mr, mode):
     try:
-        df = yf.Ticker(s).history(period=f"{HIST_DAYS}d", timeout=10)
+        df = yf.Ticker(s).history(period=f"{HIST_DAYS}d", timeout=5)
         if len(df)<20: return None
         tech = calc_technical_indicators(df, mode)
         cp = tech["price"]
@@ -287,7 +287,7 @@ def scan(mr, mode):
         if stock:
             if stock["buy_signal"]: res.append(stock)
             else: watch.append(stock)
-        time.sleep(0.15)
+        time.sleep(0.05)
     res = sorted(res, key=lambda x:x["total_score"], reverse=True)[:3]
     watch = sorted(watch, key=lambda x:x["tech"]["rsi"])[:3]
     return res, watch
@@ -341,29 +341,27 @@ def build_msg(buy, watch, tips):
 3. 股市有风险，投资需谨慎，数据仅供技术学习
 ==================================================
 """
-    return msg
+    # 截断超长消息，避免钉钉飞书拦截
+    return msg[:1800]
 
-# ======================== 推送函数 ========================
+# ======================== 推送函数（最小修复） ========================
 def send_feishu(msg):
-    proxies = {"http": None, "https": None}
     for retry in range(3):
         try:
             resp = requests.post(
                 FEISHU_WEBHOOK,
                 json={"msg_type": "text", "content": {"text": msg}},
-                timeout=10,
-                proxies=proxies
+                timeout=8
             )
             if resp.status_code == 200 and resp.json().get("code") == 0:
                 logger.info("✅ 飞书推送成功")
                 return
         except Exception as e:
             logger.warning(f"⚠️ 飞书推送重试 {retry+1}/3: {e}")
-            time.sleep(2)
+            time.sleep(1)
     logger.error("❌ 飞书推送最终失败")
 
 def send_dingtalk(msg):
-    proxies = {"http": None, "https": None}
     for retry in range(3):
         try:
             timestamp = str(round(time.time() * 1000))
@@ -378,13 +376,13 @@ def send_dingtalk(msg):
                 "msgtype": "text",
                 "text": {"content": msg}
             }
-            resp = requests.post(url, json=message, timeout=10, proxies=proxies)
+            resp = requests.post(url, json=message, timeout=8)
             if resp.status_code == 200 and resp.json().get("errcode") == 0:
                 logger.info("✅ 钉钉推送成功")
                 return
         except Exception as e:
             logger.warning(f"⚠️ 钉钉推送重试 {retry+1}/3: {e}")
-            time.sleep(2)
+            time.sleep(1)
     logger.error("❌ 钉钉推送最终失败")
 
 # ======================== 主逻辑 ========================
