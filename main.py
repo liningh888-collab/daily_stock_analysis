@@ -8,7 +8,7 @@ import hmac
 import hashlib
 import base64
 import urllib.parse
-from datetime import datetime, time
+from datetime import datetime
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -37,6 +37,7 @@ NTP_SERVERS = [
     "ntp.tencent.com"
 ]
 TIME_OFFSET = 0.0
+BJ_TZ = pytz.timezone("Asia/Shanghai")
 
 def sync_ntp_time():
     global TIME_OFFSET
@@ -48,7 +49,7 @@ def sync_ntp_time():
             logger.info(f"✅ 时间同步成功 [{server}]，偏差: {TIME_OFFSET:.3f}秒")
             return True
         except Exception as e:
-            logger.warning(f"⚠️ 时间同步失败 [{server}]: {str(e)}[:50]")
+            logger.warning(f"⚠️ 时间同步失败 [{server}]: {str(e)[:50]}")
             continue
     logger.error("❌ 所有NTP服务器同步失败，将使用本地时间")
     TIME_OFFSET = 0.0
@@ -56,15 +57,13 @@ def sync_ntp_time():
 
 def get_standard_now():
     standard_timestamp = t.time() + TIME_OFFSET
-    bj_tz = pytz.timezone("Asia/Shanghai")
-    return datetime.fromtimestamp(standard_timestamp, tz=bj_tz)
+    return datetime.fromtimestamp(standard_timestamp, tz=BJ_TZ)
 
-# ======================== 【固定9:20推送】交易时间判断 ========================
+# ======================== 【严格9:20】交易时间判断 ========================
 def is_target_trading_time():
     now = get_standard_now()
-    target_time = time(9, 20)
-    current_time = now.time()
-    return current_time.hour == target_time.hour and current_time.minute == target_time.minute
+    # 严格北京时间 9:20 左右（±1分钟内都算）
+    return now.hour == 9 and 19 <= now.minute <= 21
 
 # ======================== 【大幅放宽】T+1专属核心参数 ========================
 SELECTION_TOP_N = 5
@@ -75,7 +74,6 @@ TRADING_COST_RATE = 0.0015
 MIN_PROFIT_COVER = 0.01
 SINGLE_MAX_RISK = 250
 
-# T+1模式参数（今日买明天卖）→ 已大幅放宽
 T1_MODE = {
     "win_loss_ratio_min": 1.0,
     "day_change_min": -0.03,
@@ -367,29 +365,33 @@ def send_dingtalk(msg):
     except:
         logger.error("❌ 钉钉推送失败")
 
-# ======================== 主逻辑（9:20准时跑） ========================
+# ======================== 主逻辑（严格9:20） ========================
 def main():
     logger.info("⏳ 等待 09:20 自动执行...")
     while True:
-        try:
-            if is_trading_day() and is_target_trading_time():
-                logger.info("🚀 9:20 到达，开始执行T+1策略...")
-                mr, tips, mode = get_market_status()
-                buy, watch = scan(mr, mode)
-                msg = build_msg(buy, watch, tips)
-                send_feishu(msg)
-                send_dingtalk(msg)
-                logger.info("🎉 今日9:20推送完成")
-                break
-        except:
-            pass
+        now = get_standard_now()
+        current_time_str = f"{now.hour:02d}:{now.minute:02d}"
+        logger.info(f"当前北京时间：{current_time_str}，等待 09:20...")
+
+        # 只有交易日 + 9:20 左右才执行
+        if is_trading_day() and is_target_trading_time():
+            logger.info("🚀 09:20 到达，开始执行T+1策略...")
+            mr, tips, mode = get_market_status()
+            buy, watch = scan(mr, mode)
+            msg = build_msg(buy, watch, tips)
+            send_feishu(msg)
+            send_dingtalk(msg)
+            logger.info("🎉 今日T+1数据推送完成")
+            break
         t.sleep(10)
 
 # ======================== 启动 ========================
 if __name__ == "__main__":
     logger.info("="*50)
-    logger.info("🚀 9:20定时版 · T+1量化策略启动")
+    logger.info("🚀 GitHub Actions 触发，T+1短线策略启动")
     logger.info("="*50)
     sync_ntp_time()
     main()
-    logger.info("🏁 程序结束")
+    logger.info("="*50)
+    logger.info("🏁 程序运行结束")
+    logger.info("="*50)
