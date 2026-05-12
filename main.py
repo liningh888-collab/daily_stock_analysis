@@ -2,7 +2,7 @@ import requests
 import json
 import logging
 import os
-import time
+import time as t
 import random
 import hmac
 import hashlib
@@ -43,19 +43,19 @@ def sync_ntp_time():
     for server in NTP_SERVERS:
         try:
             client = ntplib.NTPClient()
-            response = client.request(server, version=3, timeout=3)
-            TIME_OFFSET = response.tx_time - time.time()
+            response = client.request(server, version=3, timeout=2)
+            TIME_OFFSET = response.tx_time - t.time()
             logger.info(f"✅ 时间同步成功 [{server}]，偏差: {TIME_OFFSET:.3f}秒")
             return True
         except Exception as e:
-            logger.warning(f"⚠️ 时间同步失败 [{server}]: {str(e)}")
+            logger.warning(f"⚠️ 时间同步失败 [{server}]: {str(e)}[:50]")
             continue
     logger.error("❌ 所有NTP服务器同步失败，将使用本地时间")
     TIME_OFFSET = 0.0
     return False
 
 def get_standard_now():
-    standard_timestamp = time.time() + TIME_OFFSET
+    standard_timestamp = t.time() + TIME_OFFSET
     bj_tz = pytz.timezone("Asia/Shanghai")
     return datetime.fromtimestamp(standard_timestamp, tz=bj_tz)
 
@@ -177,23 +177,13 @@ def is_trading_day():
 def get_market_status():
     try:
         hs300 = yf.Ticker("000300.SS")
-        df = hs300.history(period="60d", timeout=5)
+        df = hs300.history(period="60d", timeout=3)
         if len(df) < 10:
             return 0.5, "大盘数据不足，谨慎观察", T1_MODE
         close = df["Close"].astype(float)
         ma20 = close.rolling(20, min_periods=1).mean()
         current = close.iloc[-1]
-        day_change = (current - close.iloc[-2]) / close.iloc[-2]
-        if day_change < -0.005 or current < ma20.iloc[-1]:
-            mode = WEAK_MODE
-            name = "弱市模式"
-        elif day_change > 0.005:
-            mode = T1_MODE
-            name = "上升市模式"
-        else:
-            mode = NORMAL_MODE
-            name = "震荡市模式"
-        return 0.7, f"市场状态：{name}", mode
+        return 0.7, "市场正常，T+1策略就绪", T1_MODE
     except Exception as e:
         logger.warning(f"⚠️ 大盘状态获取异常: {e}")
         return 0.5, "大盘状态正常", T1_MODE
@@ -252,8 +242,6 @@ def get_fundamental_data(s, n):
         industry = info.get("industry","Other")
 
         is_st = "ST" in info.get("longName", "")
-        is_suspended = info.get("marketState", "") == "SUSPENDED"
-
         im = {"Thermal Coal":"煤炭","Oil & Gas Integrated":"石油天然气","Electric Utilities":"电力","Railroads":"交通运输"}
         ik = im.get(industry,"其他")
         ir = INDUSTRY_PE_RULES.get(ik, INDUSTRY_PE_RULES["其他"])
@@ -264,24 +252,21 @@ def get_fundamental_data(s, n):
 
         return {"pe":round(pe,2) if pe<999 else 999,"pb":round(pb,2) if pb<999 else 999,
                 "market_cap":mc,"turnover":tur,"industry":ik,"fund_pass":ok,
-                "is_st":is_st,"is_suspended":is_suspended}
+                "is_st":is_st,"is_suspended":False}
     except Exception as e:
         return {"pe":999,"pb":999,"market_cap":0,"turnover":0,"industry":"其他",
                 "fund_pass":True,"is_st":False,"is_suspended":False}
 
-def get_stock_data(s, n, t, mr, mode):
+def get_stock_data(s, n, t_type, mr, mode):
     try:
-        df = yf.Ticker(s).history(period=f"{HIST_DAYS}d", timeout=3)
+        df = yf.Ticker(s).history(period=f"{HIST_DAYS}d", timeout=2)
         if len(df)<5: return None
 
         tech = calc_technical_indicators(df, mode)
         cp = tech["price"]
-
-        # 放宽过滤
         if cp>MAX_PRICE: return None
 
         fund = get_fundamental_data(s,n)
-
         bp = round(cp*1.001,2)
         sl = round(bp * 0.982, 2)
         tp = round(bp * 1.02, 2)
@@ -289,10 +274,9 @@ def get_stock_data(s, n, t, mr, mode):
         ps = (tp-bp)/bp
         ls = (bp-sl)/bp
         wlr = round(ps/ls,2) if ls>0 else 1.0
-
         score = round(tech["volume_ratio"] * 2 + (1 if tech["trend_up"] else 0) + wlr, 2)
 
-        return {"symbol":s,"code":s.replace(".SS","").replace(".SZ",""),"name":n,"pool_type":t,
+        return {"symbol":s,"code":s.replace(".SS","").replace(".SZ",""),"name":n,"pool_type":t_type,
                 "tech":tech,"fund":fund,"win_loss_ratio":wlr,"total_score":score,"buy_signal":True,
                 "stats":{"price_range_low":sl,"price_range_high":tp,"volatility_pct":1.8,
                         "win_loss_ratio":wlr,"stop_loss_pct":1.8,"take_profit_pct":2.0}}
@@ -304,11 +288,11 @@ def scan(mr, mode):
     pool = {**T1_POOL, **MY_STOCKS}
 
     for s,n in pool.items():
-        t = "t1" if s in T1_POOL else "core"
-        stock = get_stock_data(s,n,t,mr,mode)
+        t_type = "t1" if s in T1_POOL else "core"
+        stock = get_stock_data(s,n,t_type,mr,mode)
         if stock:
             res.append(stock)
-        time.sleep(0.02)
+        t.sleep(0.02)
 
     res = sorted(res, key=lambda x:x["total_score"], reverse=True)[:5]
     return res, watch
@@ -362,7 +346,7 @@ def build_msg(buy, watch, tips):
 # ======================== 推送 ========================
 def send_feishu(msg):
     try:
-        resp = requests.post(FEISHU_WEBHOOK, json={"msg_type": "text", "content": {"text": msg}}, timeout=8)
+        resp = requests.post(FEISHU_WEBHOOK, json={"msg_type": "text", "content": {"text": msg}}, timeout=5)
         if resp.status_code == 200:
             logger.info("✅ 飞书推送成功")
     except:
@@ -370,7 +354,7 @@ def send_feishu(msg):
 
 def send_dingtalk(msg):
     try:
-        timestamp = str(round(time.time() * 1000))
+        timestamp = str(round(t.time() * 1000))
         secret_enc = DINGTALK_SECRET.encode('utf-8')
         string_to_sign = f"{timestamp}\n{DINGTALK_SECRET}"
         string_to_sign_enc = string_to_sign.encode('utf-8')
@@ -378,7 +362,7 @@ def send_dingtalk(msg):
         sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
         url = f"{DINGTALK_WEBHOOK}&timestamp={timestamp}&sign={sign}"
         message = {"msgtype": "text", "text": {"content": msg}}
-        requests.post(url, json=message, timeout=8)
+        requests.post(url, json=message, timeout=5)
         logger.info("✅ 钉钉推送成功")
     except:
         logger.error("❌ 钉钉推送失败")
@@ -387,16 +371,19 @@ def send_dingtalk(msg):
 def main():
     logger.info("⏳ 等待 09:20 自动执行...")
     while True:
-        if is_trading_day() and is_target_trading_time():
-            logger.info("🚀 9:20 到达，开始执行T+1策略...")
-            mr, tips, mode = get_market_status()
-            buy, watch = scan(mr, mode)
-            msg = build_msg(buy, watch, tips)
-            send_feishu(msg)
-            send_dingtalk(msg)
-            logger.info("🎉 今日9:20推送完成")
-            break
-        time.sleep(10)
+        try:
+            if is_trading_day() and is_target_trading_time():
+                logger.info("🚀 9:20 到达，开始执行T+1策略...")
+                mr, tips, mode = get_market_status()
+                buy, watch = scan(mr, mode)
+                msg = build_msg(buy, watch, tips)
+                send_feishu(msg)
+                send_dingtalk(msg)
+                logger.info("🎉 今日9:20推送完成")
+                break
+        except:
+            pass
+        t.sleep(10)
 
 # ======================== 启动 ========================
 if __name__ == "__main__":
