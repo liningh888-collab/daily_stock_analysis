@@ -24,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 飞书 Webhook
-FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/7e8c7d35-382e-43de-8479-0434921d338c"
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/7e8c7d35-382e-43de-8479-04349212338c"
 
 # 钉钉配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=8cd6832317216fdfaca1d2acba57c11e3024f20921365804ba96444f7945b949"
@@ -59,11 +59,23 @@ def get_standard_now():
     standard_timestamp = t.time() + TIME_OFFSET
     return datetime.fromtimestamp(standard_timestamp, tz=BJ_TZ)
 
-# ======================== 【严格9:20】交易时间判断 ========================
-def is_target_trading_time():
-    now = get_standard_now()
-    # 严格北京时间 9:20 左右（±1分钟内都算）
-    return now.hour == 9 and 19 <= now.minute <= 21
+# ======================== 交易日期判断 ========================
+def is_trading_day():
+    today = get_standard_now()
+    if today.weekday() > 4:
+        logger.info("❌ 周末休市")
+        return False
+    holidays_2026 = [
+        "2026-01-01", "2026-01-28", "2026-01-29", "2026-01-30", "2026-01-31",
+        "2026-02-01", "2026-02-02", "2026-04-04", "2026-05-01", "2026-05-28",
+        "2026-05-29", "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04",
+        "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08"
+    ]
+    today_str = today.strftime("%Y-%m-%d")
+    if today_str in holidays_2026:
+        logger.info(f"❌ 节假日休市: {today_str}")
+        return False
+    return True
 
 # ======================== 【大幅放宽】T+1专属核心参数 ========================
 SELECTION_TOP_N = 5
@@ -155,23 +167,6 @@ MY_STOCKS = {
 }
 
 # ======================== 工具函数 ========================
-def is_trading_day():
-    today = get_standard_now()
-    if today.weekday() > 4:
-        logger.info("❌ 周末休市")
-        return False
-    holidays_2026 = [
-        "2026-01-01", "2026-01-28", "2026-01-29", "2026-01-30", "2026-01-31",
-        "2026-02-01", "2026-02-02", "2026-04-04", "2026-05-01", "2026-05-28",
-        "2026-05-29", "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04",
-        "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08"
-    ]
-    today_str = today.strftime("%Y-%m-%d")
-    if today_str in holidays_2026:
-        logger.info(f"❌ 节假日休市: {today_str}")
-        return False
-    return True
-
 def get_market_status():
     try:
         hs300 = yf.Ticker("000300.SS")
@@ -365,25 +360,19 @@ def send_dingtalk(msg):
     except:
         logger.error("❌ 钉钉推送失败")
 
-# ======================== 主逻辑（严格9:20） ========================
+# ======================== 主逻辑（启动即执行） ========================
 def main():
-    logger.info("⏳ 等待 09:20 自动执行...")
-    while True:
-        now = get_standard_now()
-        current_time_str = f"{now.hour:02d}:{now.minute:02d}"
-        logger.info(f"当前北京时间：{current_time_str}，等待 09:20...")
-
-        # 只有交易日 + 9:20 左右才执行
-        if is_trading_day() and is_target_trading_time():
-            logger.info("🚀 09:20 到达，开始执行T+1策略...")
-            mr, tips, mode = get_market_status()
-            buy, watch = scan(mr, mode)
-            msg = build_msg(buy, watch, tips)
-            send_feishu(msg)
-            send_dingtalk(msg)
-            logger.info("🎉 今日T+1数据推送完成")
-            break
-        t.sleep(10)
+    logger.info("🚀 开始运行T+1短线策略...")
+    # 只有交易日才执行推送
+    if is_trading_day():
+        mr, tips, mode = get_market_status()
+        buy, watch = scan(mr, mode)
+        msg = build_msg(buy, watch, tips)
+        send_feishu(msg)
+        send_dingtalk(msg)
+        logger.info("🎉 今日T+1数据推送完成")
+    else:
+        logger.info("ℹ️ 今日非交易日，不推送")
 
 # ======================== 启动 ========================
 if __name__ == "__main__":
