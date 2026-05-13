@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import requests
 import json
 import logging
@@ -16,7 +15,7 @@ import yfinance as yf
 import pytz
 import ntplib
 
-# ======================== 全局配置（敏感信息从环境变量读取） ========================
+# ======================== 全局配置 ========================
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -24,10 +23,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 从GitHub Secrets读取敏感信息，避免泄露
-FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK", "")
-DINGTALK_WEBHOOK = os.getenv("DINGTALK_WEBHOOK", "")
-DINGTALK_SECRET = os.getenv("DINGTALK_SECRET", "")
+# 飞书 Webhook
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/7e8c7d35-382e-43de-8479-04349212338c"
+
+# 钉钉配置
+DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=8cd6832317216fdfaca1d2acba57c11e3024f20921365804ba96444f7945b949"
+DINGTALK_SECRET = "SECf67646ed7edca294f7575a5bca513ba7de5c00dffe1ce5750da3175fd8fcdddc"
 
 # ======================== NTP网络时间校准 ========================
 NTP_SERVERS = [
@@ -58,7 +59,21 @@ def get_standard_now():
     standard_timestamp = t.time() + TIME_OFFSET
     return datetime.fromtimestamp(standard_timestamp, tz=BJ_TZ)
 
-# ======================== 交易日期判断（2026年节假日） ========================
+# 判断当前属于哪个推送时段
+def get_time_type():
+    now = get_standard_now()
+    h = now.hour
+    m = now.minute
+    if h == 5 and m == 40:
+        return "morning"
+    elif h == 9 and m == 0:
+        return "open"
+    elif h == 15 and m == 0:
+        return "close"
+    else:
+        return "normal"
+
+# ======================== 交易日期判断 ========================
 def is_trading_day():
     today = get_standard_now()
     if today.weekday() > 4:
@@ -76,7 +91,7 @@ def is_trading_day():
         return False
     return True
 
-# ======================== T+1专属核心参数 ========================
+# ======================== 【大幅放宽】T+1专属核心参数 ========================
 SELECTION_TOP_N = 5
 HIST_DAYS = 30
 CAPITAL = 10000
@@ -166,19 +181,6 @@ MY_STOCKS = {
 }
 
 # ======================== 工具函数 ========================
-def get_run_type():
-    """根据运行时间判断推送类型"""
-    now = get_standard_now()
-    hour = now.hour
-    if 5 <= hour < 8:
-        return "早盘提醒"
-    elif 8 <= hour < 10:
-        return "开盘提醒"
-    elif 14 <= hour < 16:
-        return "收盘总结"
-    else:
-        return "临时推送"
-
 def get_market_status():
     try:
         hs300 = yf.Ticker("000300.SS")
@@ -302,13 +304,27 @@ def scan(mr, mode):
     res = sorted(res, key=lambda x:x["total_score"], reverse=True)[:5]
     return res, watch
 
-# ======================== 推送文案（区分不同时间点） ========================
-def build_msg(buy, watch, tips, run_type):
+# ======================== 分时段推送文案 ========================
+def build_msg(buy, watch, tips, time_type):
     now = get_standard_now().strftime("%Y-%m-%d %H:%M:%S")
+    if time_type == "morning":
+        title = "【🤖 T+1量化 · 早盘5:40前瞻】"
+        tip_text = "早盘前瞻：提前筛选当日备选标的，等待尾盘定点介入"
+    elif time_type == "open":
+        title = "【🤖 T+1量化 · 9:00开盘参考】"
+        tip_text = "开盘参考：集合竞价结束，观察量能与开盘溢价"
+    elif time_type == "close":
+        title = "【🤖 T+1量化 · 15:00收盘总结】"
+        tip_text = "收盘总结：当日标的复盘，明日持仓隔日处理规划"
+    else:
+        title = "【🤖 T+1短线量化算法 · 日常推送】"
+        tip_text = "尾盘14:55左右买入，次日收盘前无论盈亏全部清仓"
+
     msg = f"""==================================================
-【🤖 T+1短线量化算法 · {run_type}】
+{title}
 📅 输出时间：{now}
 📊 大盘状态：{tips}
+💡 策略提示：{tip_text}
 ==================================================
 ⚠️ 法律合规声明（务必阅读）
 1. 本内容为 Python 量化程序**全自动运算输出的公开行情数据记录**，属于历史统计信息，
@@ -334,66 +350,29 @@ def build_msg(buy, watch, tips, run_type):
     else:
         msg += "⚠️ 今日暂无符合条件标的\n"
 
-    # 不同时间点添加不同提醒
-    if run_type == "早盘提醒":
-        msg += """
-==================================================
-💡 早盘操作提醒
-1. 9:15-9:25 观察集合竞价情况
-2. 9:30-10:00 避免追高，等待回调
-3. 严格执行尾盘买入策略，不提前建仓
-"""
-    elif run_type == "开盘提醒":
-        msg += """
-==================================================
-💡 开盘操作提醒
-1. 关注开盘量能变化，量比>1.5为强势
-2. 避免买入开盘涨幅>5%的标的
-3. 保持耐心，等待尾盘最佳买点
-"""
-    elif run_type == "收盘总结":
-        msg += """
-==================================================
-💡 收盘总结提醒
-1. 今日标的已全部推送
-2. 明日14:45前无论盈亏全部清仓
-3. 严格执行止损纪律，绝不扛单
-"""
-
     msg += """
 ==================================================
-⚠️ 风险提示：股市有风险，投资需谨慎
-本内容仅为量化技术研究，不构成任何投资建议
+💡 T+1专属重要提醒
+1. 严格执行：尾盘14:55买入，次日14:45前无论盈亏全部清仓
+2. 止损纪律：跌破止损价立即卖出，绝不扛单
+3. 仓位控制：单只股票仓位不超过总资金的30%
+4. 本内容为量化算法自动输出，非个股推荐
+5. 禁止跟单交易、禁止对外传播、禁止用于实盘决策
+6. 股市有风险，投资需谨慎，数据仅供技术学习
 ==================================================
 """
     return msg[:1800]
 
-# ======================== 推送函数（修复钉钉签名+飞书错误处理） ========================
+# ======================== 推送 ========================
 def send_feishu(msg):
-    if not FEISHU_WEBHOOK:
-        logger.warning("⚠️ 未配置飞书Webhook，跳过推送")
-        return False
     try:
-        resp = requests.post(
-            FEISHU_WEBHOOK,
-            json={"msg_type": "text", "content": {"text": msg}},
-            timeout=5
-        )
-        resp_json = resp.json()
-        if resp.status_code == 200 and resp_json.get("code") == 0:
+        resp = requests.post(FEISHU_WEBHOOK, json={"msg_type": "text", "content": {"text": msg}}, timeout=5)
+        if resp.status_code == 200:
             logger.info("✅ 飞书推送成功")
-            return True
-        else:
-            logger.error(f"❌ 飞书推送失败: {resp.text}")
-            return False
-    except Exception as e:
-        logger.error(f"❌ 飞书推送异常: {str(e)}")
-        return False
+    except:
+        logger.error("❌ 飞书推送失败")
 
 def send_dingtalk(msg):
-    if not DINGTALK_WEBHOOK or not DINGTALK_SECRET:
-        logger.warning("⚠️ 未配置钉钉Webhook或密钥，跳过推送")
-        return False
     try:
         timestamp = str(round(t.time() * 1000))
         secret_enc = DINGTALK_SECRET.encode('utf-8')
@@ -403,42 +382,31 @@ def send_dingtalk(msg):
         sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
         url = f"{DINGTALK_WEBHOOK}&timestamp={timestamp}&sign={sign}"
         message = {"msgtype": "text", "text": {"content": msg}}
-        resp = requests.post(url, json=message, timeout=5)
-        resp_json = resp.json()
-        if resp.status_code == 200 and resp_json.get("errcode") == 0:
-            logger.info("✅ 钉钉推送成功")
-            return True
-        else:
-            logger.error(f"❌ 钉钉推送失败: {resp.text}")
-            return False
-    except Exception as e:
-        logger.error(f"❌ 钉钉推送异常: {str(e)}")
-        return False
+        requests.post(url, json=message, timeout=5)
+        logger.info("✅ 钉钉推送成功")
+    except:
+        logger.error("❌ 钉钉推送失败")
 
 # ======================== 主逻辑 ========================
 def main():
     logger.info("🚀 开始运行T+1短线策略...")
-    run_type = get_run_type()
-    logger.info(f"📌 当前运行类型: {run_type}")
-    
-    # 只有交易日才执行推送
+    time_type = get_time_type()
+    logger.info(f"⏰ 当前推送时段类型：{time_type}")
+
     if is_trading_day():
         mr, tips, mode = get_market_status()
         buy, watch = scan(mr, mode)
-        msg = build_msg(buy, watch, tips, run_type)
-        
-        # 同时推送飞书和钉钉
+        msg = build_msg(buy, watch, tips, time_type)
         send_feishu(msg)
         send_dingtalk(msg)
-        
-        logger.info("🎉 今日数据推送完成")
+        logger.info("🎉 今日对应时段数据推送完成")
     else:
         logger.info("ℹ️ 今日非交易日，不推送")
 
 # ======================== 启动 ========================
 if __name__ == "__main__":
     logger.info("="*50)
-    logger.info("🚀 T+1短线量化策略启动")
+    logger.info("🚀 GitHub Actions 定时触发策略启动")
     logger.info("="*50)
     sync_ntp_time()
     main()
