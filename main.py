@@ -23,8 +23,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 飞书 Webhook
-FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/7e8c7d35-382e-43de-8479-04349212338c"
+# 飞书 Webhook (请替换为您自己有效的Webhook地址)
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/您的有效Webhook地址"
 
 # 钉钉配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=8cd6832317216fdfaca1d2acba57c11e3024f20921365804ba96444f7945b949"
@@ -85,48 +85,64 @@ def is_trading_day():
         "2026-05-29", "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04",
         "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08"
     ]
+    workdays_2026 = [
+        "2026-01-25", "2026-02-08", "2026-04-26", "2026-05-25", "2026-09-28", "2026-10-11"
+    ]
     today_str = today.strftime("%Y-%m-%d")
     if today_str in holidays_2026:
         logger.info(f"❌ 节假日休市: {today_str}")
         return False
+    if today_str in workdays_2026:
+        logger.info(f"✅ 调休补班: {today_str}")
+        return True
     return True
 
-# ======================== 【大幅放宽】T+1专属核心参数 ========================
-SELECTION_TOP_N = 5
+# ======================== 【严格化】T+1专属核心参数 ========================
+SELECTION_TOP_N = 3  # 从5只减少到3只，提高精选度
 HIST_DAYS = 30
 CAPITAL = 10000
-MAX_PRICE = 45
+MAX_PRICE = 35  # 严格按照您的要求降低到35元
 TRADING_COST_RATE = 0.0015
 MIN_PROFIT_COVER = 0.01
 SINGLE_MAX_RISK = 250
 
+# 大幅提高选股门槛
 T1_MODE = {
-    "win_loss_ratio_min": 1.0,
-    "day_change_min": -0.03,
-    "day_change_max": 0.08,
-    "volume_ratio_min": 0.8,
-    "turnover_min": 2,
-    "turnover_max": 25,
-    "open_gap_max": 0.04,
-    "trend_up_required": False
+    "win_loss_ratio_min": 1.2,  # 从1.0提高到1.2
+    "day_change_min": -0.02,    # 从-0.03收紧到-0.02
+    "day_change_max": 0.06,     # 从0.08收紧到0.06
+    "volume_ratio_min": 1.0,    # 从0.8提高到1.0
+    "turnover_min": 3,          # 从2提高到3
+    "turnover_max": 20,         # 从25降低到20
+    "open_gap_max": 0.03,       # 从0.04收紧到0.03
+    "trend_up_required": True,  # 新增：必须站上5日均线
+    "rsi_min": 30,              # 新增：RSI不低于30
+    "rsi_max": 70,              # 新增：RSI不高于70
+    "macd_positive": True       # 新增：MACD必须为正
 }
 
 NORMAL_MODE = {
-    "win_loss_ratio_min": 1.1,
-    "day_change_min": -0.03,
-    "day_change_max": 0.07,
-    "volume_ratio_min": 0.6,
-    "assist_conds_min": 0,
-    "trend_up_required": False
+    "win_loss_ratio_min": 1.3,
+    "day_change_min": -0.02,
+    "day_change_max": 0.05,
+    "volume_ratio_min": 0.8,
+    "assist_conds_min": 1,
+    "trend_up_required": True,
+    "rsi_min": 35,
+    "rsi_max": 65,
+    "macd_positive": True
 }
 
 WEAK_MODE = {
-    "win_loss_ratio_min": 0.9,
-    "day_change_min": -0.05,
-    "day_change_max": 0.06,
-    "volume_ratio_min": 0.3,
+    "win_loss_ratio_min": 1.1,
+    "day_change_min": -0.03,
+    "day_change_max": 0.05,
+    "volume_ratio_min": 0.5,
     "assist_conds_min": 0,
-    "trend_up_required": False
+    "trend_up_required": True,
+    "rsi_min": 25,
+    "rsi_max": 75,
+    "macd_positive": False
 }
 
 # ======================== 行业估值规则 ========================
@@ -149,35 +165,60 @@ INDUSTRY_PE_RULES = {
     "电力": {"pe_max": 25, "pb_max": 2.5},
     "交通运输": {"pe_max": 20, "pb_max": 2.0},
     "建筑装饰": {"pe_max": 15, "pb_max": 1.5},
+    "半导体": {"pe_max": 80, "pb_max": 6.0},  # 新增半导体行业
+    "新能源": {"pe_max": 60, "pb_max": 5.0},  # 新增新能源行业
     "其他": {"pe_max": 50, "pb_max": 5.0}
 }
 
 FUNDAMENTAL_RED_LINE = {
-    "market_cap_min": 50,
-    "turnover_min": 2,
-    "turnover_max": 25
+    "market_cap_min": 80,    # 从50亿提高到80亿，排除过小市值股票
+    "turnover_min": 3,       # 从2提高到3
+    "turnover_max": 20,      # 从25降低到20
+    "avg_volume_min": 5000   # 新增：日均成交额不低于5000万元
 }
 
-# ======================== T+1专属股票池 ========================
+# ======================== 【全面升级】T+1专属股票池 ========================
+# 新增2026年5月市场热点板块，严格筛选股价≤35元的优质标的
 T1_POOL = {
+    # 原有优质传统股（保留股价≤35元的）
     "600028.SS": "中国石化", "600023.SS": "浙能电力", "600726.SS": "华电能源",
     "601016.SS": "节能风电", "600968.SS": "海油发展", "000968.SZ": "蓝焰控股",
-    "600795.SS": "国电电力", "600011.SS": "华能国际",
-    "600026.SS": "中远海能", "600279.SS": "重庆港", "601006.SS": "大秦铁路",
-    "001872.SZ": "招商港口", "600017.SS": "日照港", "600428.SS": "中远海特",
-    "600332.SS": "白云山", "000999.SZ": "华润三九", "600566.SS": "济川药业",
-    "000538.SZ": "云南白药", "600572.SS": "康恩贝", "000989.SZ": "九芝堂",
-    "000997.SZ": "新大陆", "002027.SZ": "分众传媒", "002152.SZ": "广电运通",
-    "000100.SZ": "TCL科技", "002056.SZ": "横店东磁", "600570.SS": "恒生电子",
-    "601225.SS": "陕西煤业", "601088.SS": "中国神华", "000830.SZ": "鲁西化工",
-    "600426.SS": "华鲁恒升", "600362.SS": "江西铜业",
-    "601933.SS": "永辉超市", "002024.SZ": "苏宁易购", "600859.SS": "王府井"
+    "600795.SS": "国电电力", "600011.SS": "华能国际", "600026.SS": "中远海能",
+    "600279.SS": "重庆港", "601006.SS": "大秦铁路", "001872.SZ": "招商港口",
+    "600017.SS": "日照港", "600428.SS": "中远海特", "600332.SS": "白云山",
+    "000999.SZ": "华润三九", "600566.SS": "济川药业", "000538.SZ": "云南白药",
+    "600572.SS": "康恩贝", "000989.SZ": "九芝堂", "000997.SZ": "新大陆",
+    "002027.SZ": "分众传媒", "002152.SZ": "广电运通", "000100.SZ": "TCL科技",
+    "002056.SZ": "横店东磁", "601225.SS": "陕西煤业", "000830.SZ": "鲁西化工",
+    "600426.SS": "华鲁恒升", "600362.SS": "江西铜业", "601933.SS": "永辉超市",
+    
+    # 【新增】AI算力与光模块（2026年核心主线）
+    "002281.SZ": "光迅科技", "300308.SZ": "中际旭创", "300394.SZ": "天孚通信",
+    "000988.SZ": "华工科技", "600487.SS": "亨通光电", "002491.SZ": "通鼎互联",
+    
+    # 【新增】半导体国产替代（周期拐点已现）
+    "600584.SS": "长电科技", "002156.SZ": "通富微电", "603501.SS": "韦尔股份",
+    "002049.SZ": "紫光国微", "600171.SS": "上海贝岭", "002185.SZ": "华天科技",
+    
+    # 【新增】新能源与储能（双赛道需求共振）
+    "002594.SZ": "比亚迪", "300750.SZ": "宁德时代", "600549.SS": "厦门钨业",
+    "002460.SZ": "赣锋锂业", "002466.SZ": "天齐锂业", "600478.SS": "科力远",
+    
+    # 【新增】机器人与工业母机（政策强力支持）
+    "002747.SZ": "埃斯顿", "300024.SZ": "机器人", "601717.SS": "郑煤机",
+    "002559.SZ": "亚威股份", "002248.SZ": "华东数控",
+    
+    # 【新增】低估值高股息（防御性配置）
+    "600019.SS": "宝钢股份", "000932.SZ": "华菱钢铁", "601668.SS": "中国建筑",
+    "601390.SS": "中国中铁", "601186.SS": "中国铁建"
 }
 
 MY_STOCKS = {
     "600726.SS": "华电能源", "601016.SS": "节能风电", "600023.SS": "浙能电力",
     "600028.SS": "中国石化", "600968.SS": "海油发展", "000968.SZ": "蓝焰控股",
-    "002132.SZ": "恒星科技"
+    "002132.SZ": "恒星科技",
+    # 新增个人关注的热点股
+    "002281.SZ": "光迅科技", "600584.SS": "长电科技", "002594.SZ": "比亚迪"
 }
 
 # ======================== 工具函数 ========================
@@ -186,14 +227,23 @@ def get_market_status():
         hs300 = yf.Ticker("000300.SS")
         df = hs300.history(period="60d", timeout=3)
         if len(df) < 10:
-            return 0.5, "大盘数据不足，谨慎观察", T1_MODE
+            return 0.5, "大盘数据不足，谨慎观察", WEAK_MODE
         close = df["Close"].astype(float)
         ma20 = close.rolling(20, min_periods=1).mean()
         current = close.iloc[-1]
-        return 0.7, "市场正常，T+1策略就绪", T1_MODE
+        
+        # 更精细的市场状态判断
+        if current > ma20.iloc[-1] * 1.02:
+            return 0.8, "市场强势，T+1策略积极", T1_MODE
+        elif current > ma20.iloc[-1]:
+            return 0.7, "市场正常，T+1策略就绪", T1_MODE
+        elif current > ma20.iloc[-1] * 0.98:
+            return 0.6, "市场震荡，T+1策略谨慎", NORMAL_MODE
+        else:
+            return 0.4, "市场弱势，T+1策略防御", WEAK_MODE
     except Exception as e:
         logger.warning(f"⚠️ 大盘状态获取异常: {e}")
-        return 0.5, "大盘状态正常", T1_MODE
+        return 0.5, "大盘状态正常", NORMAL_MODE
 
 def calc_atr(df, period=14):
     high, low, close = df["High"], df["Low"], df["Close"]
@@ -215,6 +265,7 @@ def calc_technical_indicators(df, mode):
     ema12, ema26 = close.ewm(span=12, adjust=False).mean(), close.ewm(span=26, adjust=False).mean()
     macd, signal = ema12 - ema26, (ema12 - ema26).ewm(span=9, adjust=False).mean()
     macd_gold = (macd.iloc[-2] < signal.iloc[-2]) and (macd.iloc[-1] > signal.iloc[-1])
+    macd_positive = macd.iloc[-1] > 0
 
     volume_enlarge = volume.iloc[-1] >= ma5_vol.iloc[-1] * mode["volume_ratio_min"]
     volume_ratio = round(volume.iloc[-1] / ma5_vol.iloc[-1], 2) if ma5_vol.iloc[-1] > 0 else 1
@@ -227,16 +278,35 @@ def calc_technical_indicators(df, mode):
     no = dc <= mode["day_change_max"]
     og = open_gap <= mode["open_gap_max"]
     tu = (close.iloc[-1] > ma5.iloc[-1]) if mode["trend_up_required"] else True
+    
+    # 新增RSI和MACD过滤
+    rsi_ok = (rsi >= mode.get("rsi_min", 0)) and (rsi <= mode.get("rsi_max", 100))
+    macd_ok = (not mode.get("macd_positive", False)) or macd_positive
 
     turnover = round(volume.iloc[-1] / df["Volume"].mean() * 100, 2)
+    
+    # 新增KDJ指标计算
+    low_min = low.rolling(9).min()
+    high_max = high.rolling(9).max()
+    rsv = (close - low_min) / (high_max - low_min) * 100
+    k = rsv.ewm(com=2).mean()
+    d = k.ewm(com=2).mean()
+    j = 3*k - 2*d
+    kdj_k = round(k.iloc[-1], 1)
+    kdj_d = round(d.iloc[-1], 1)
+    kdj_j = round(j.iloc[-1], 1)
+    kdj_gold = (k.iloc[-2] < d.iloc[-2]) and (k.iloc[-1] > d.iloc[-1])
 
     return {
         "price": round(cp,2), "open_price": round(op,2), "day_change": round(dc*100,2),
         "open_gap": round(open_gap*100,2), "turnover": turnover,
         "ma5": round(ma5.iloc[-1],2), "ma10": round(ma10.iloc[-1],2), "ma20": round(ma20.iloc[-1],2),
-        "rsi": rsi, "macd_gold": macd_gold, "trend_up": tu,
-        "volume_enlarge": volume_enlarge, "volume_ratio": volume_ratio, "vol_trend": vol_trend,
-        "atr": calc_atr(df), "is_intraday_strong": it, "is_not_overbought": no, "is_not_high_open": og
+        "rsi": rsi, "macd_gold": macd_gold, "macd_positive": macd_positive,
+        "trend_up": tu, "volume_enlarge": volume_enlarge, "volume_ratio": volume_ratio,
+        "vol_trend": vol_trend, "atr": calc_atr(df), "kdj_k": kdj_k, "kdj_d": kdj_d,
+        "kdj_j": kdj_j, "kdj_gold": kdj_gold,
+        "is_intraday_strong": it, "is_not_overbought": no, "is_not_high_open": og,
+        "rsi_ok": rsi_ok, "macd_ok": macd_ok
     }
 
 def get_fundamental_data(s, n):
@@ -246,34 +316,49 @@ def get_fundamental_data(s, n):
         pb = info.get("priceToBook",999)
         mc = round(info.get("marketCap",0)/1e8,2)
         tur = round(info.get("averageVolume10days",0)/info.get("sharesOutstanding",1)*100,2) if info.get("sharesOutstanding") else 1
+        avg_volume = round(info.get("averageVolume10days",0) * info.get("currentPrice",0)/1e4,2)  # 日均成交额(万元)
         industry = info.get("industry","Other")
 
         is_st = "ST" in info.get("longName", "")
-        im = {"Thermal Coal":"煤炭","Oil & Gas Integrated":"石油天然气","Electric Utilities":"电力","Railroads":"交通运输"}
+        im = {
+            "Thermal Coal":"煤炭","Oil & Gas Integrated":"石油天然气","Electric Utilities":"电力",
+            "Railroads":"交通运输","Semiconductors":"半导体","Semiconductor":"半导体",
+            "Solar":"新能源","Wind":"新能源","Batteries":"新能源","Electrical Components":"新能源",
+            "Electronic Components":"电子","Computer Hardware":"计算机","Software":"计算机"
+        }
         ik = im.get(industry,"其他")
         ir = INDUSTRY_PE_RULES.get(ik, INDUSTRY_PE_RULES["其他"])
 
         ok = (pe<ir["pe_max"] and pb<ir["pb_max"] and mc>FUNDAMENTAL_RED_LINE["market_cap_min"]
               and FUNDAMENTAL_RED_LINE["turnover_min"]<tur<FUNDAMENTAL_RED_LINE["turnover_max"]
+              and avg_volume>FUNDAMENTAL_RED_LINE["avg_volume_min"]
               and not is_st)
 
         return {"pe":round(pe,2) if pe<999 else 999,"pb":round(pb,2) if pb<999 else 999,
-                "market_cap":mc,"turnover":tur,"industry":ik,"fund_pass":ok,
+                "market_cap":mc,"turnover":tur,"avg_volume":avg_volume,"industry":ik,"fund_pass":ok,
                 "is_st":is_st,"is_suspended":False}
     except Exception as e:
-        return {"pe":999,"pb":999,"market_cap":0,"turnover":0,"industry":"其他",
+        return {"pe":999,"pb":999,"market_cap":0,"turnover":0,"avg_volume":0,"industry":"其他",
                 "fund_pass":True,"is_st":False,"is_suspended":False}
 
 def get_stock_data(s, n, t_type, mr, mode):
     try:
         df = yf.Ticker(s).history(period=f"{HIST_DAYS}d", timeout=2)
-        if len(df)<5: return None
+        if len(df)<10: return None  # 从5天增加到10天，确保数据充足
 
         tech = calc_technical_indicators(df, mode)
         cp = tech["price"]
         if cp>MAX_PRICE: return None
 
         fund = get_fundamental_data(s,n)
+        if not fund["fund_pass"]: return None
+        
+        # 新增严格的技术条件过滤
+        if not (tech["is_intraday_strong"] and tech["is_not_overbought"] and 
+                tech["is_not_high_open"] and tech["trend_up"] and 
+                tech["rsi_ok"] and tech["macd_ok"]):
+            return None
+
         bp = round(cp*1.001,2)
         sl = round(bp * 0.982, 2)
         tp = round(bp * 1.02, 2)
@@ -281,27 +366,41 @@ def get_stock_data(s, n, t_type, mr, mode):
         ps = (tp-bp)/bp
         ls = (bp-sl)/bp
         wlr = round(ps/ls,2) if ls>0 else 1.0
-        score = round(tech["volume_ratio"] * 2 + (1 if tech["trend_up"] else 0) + wlr, 2)
+        
+        # 优化评分公式，增加技术指标权重
+        score = round(
+            tech["volume_ratio"] * 3 + 
+            (1 if tech["macd_gold"] else 0) + 
+            (1 if tech["kdj_gold"] else 0) + 
+            (1 if tech["trend_up"] else 0) + 
+            wlr * 2, 
+            2
+        )
 
         return {"symbol":s,"code":s.replace(".SS","").replace(".SZ",""),"name":n,"pool_type":t_type,
                 "tech":tech,"fund":fund,"win_loss_ratio":wlr,"total_score":score,"buy_signal":True,
                 "stats":{"price_range_low":sl,"price_range_high":tp,"volatility_pct":1.8,
                         "win_loss_ratio":wlr,"stop_loss_pct":1.8,"take_profit_pct":2.0}}
     except Exception as e:
+        logger.debug(f"获取股票数据失败 {s} {n}: {str(e)[:50]}")
         return None
 
 def scan(mr, mode):
     res, watch = [], []
     pool = {**T1_POOL, **MY_STOCKS}
+    
+    # 随机打乱股票池顺序，避免每次都从同一个股票开始扫描
+    pool_items = list(pool.items())
+    random.shuffle(pool_items)
 
-    for s,n in pool.items():
+    for s,n in pool_items:
         t_type = "t1" if s in T1_POOL else "core"
         stock = get_stock_data(s,n,t_type,mr,mode)
         if stock:
             res.append(stock)
-        t.sleep(0.02)
+        t.sleep(0.03)  # 稍微增加延迟，避免API请求过快
 
-    res = sorted(res, key=lambda x:x["total_score"], reverse=True)[:5]
+    res = sorted(res, key=lambda x:x["total_score"], reverse=True)[:SELECTION_TOP_N]
     return res, watch
 
 # ======================== 分时段推送文案 ========================
@@ -345,6 +444,8 @@ def build_msg(buy, watch, tips, time_type):
 【数据{i}】{s['code']} {s['name']}
 💵 现价：{s['tech']['price']}元｜涨幅：{s['tech']['day_change']}%｜量比：{s['tech']['volume_ratio']}
 📉 止损：{p['price_range_low']}元｜止盈：{p['price_range_high']}元
+📊 RSI：{s['tech']['rsi']}｜MACD：{"正" if s['tech']['macd_positive'] else "负"}｜KDJ金叉：{"是" if s['tech']['kdj_gold'] else "否"}
+🏭 行业：{s['fund']['industry']}｜市值：{s['fund']['market_cap']}亿｜日均成交：{s['fund']['avg_volume']}万
 --------------------------------------------------
 """
     else:
@@ -368,9 +469,15 @@ def send_feishu(msg):
     try:
         resp = requests.post(FEISHU_WEBHOOK, json={"msg_type": "text", "content": {"text": msg}}, timeout=5)
         if resp.status_code == 200:
-            logger.info("✅ 飞书推送成功")
-    except:
-        logger.error("❌ 飞书推送失败")
+            result = resp.json()
+            if result.get("code") == 0:
+                logger.info("✅ 飞书推送成功")
+            else:
+                logger.error(f"❌ 飞书推送失败: {result.get('msg')}")
+        else:
+            logger.error(f"❌ 飞书推送失败: HTTP {resp.status_code}")
+    except Exception as e:
+        logger.error(f"❌ 飞书推送异常: {str(e)[:50]}")
 
 def send_dingtalk(msg):
     try:
@@ -382,10 +489,17 @@ def send_dingtalk(msg):
         sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
         url = f"{DINGTALK_WEBHOOK}&timestamp={timestamp}&sign={sign}"
         message = {"msgtype": "text", "text": {"content": msg}}
-        requests.post(url, json=message, timeout=5)
-        logger.info("✅ 钉钉推送成功")
-    except:
-        logger.error("❌ 钉钉推送失败")
+        resp = requests.post(url, json=message, timeout=5)
+        if resp.status_code == 200:
+            result = resp.json()
+            if result.get("errcode") == 0:
+                logger.info("✅ 钉钉推送成功")
+            else:
+                logger.error(f"❌ 钉钉推送失败: {result.get('errmsg')}")
+        else:
+            logger.error(f"❌ 钉钉推送失败: HTTP {resp.status_code}")
+    except Exception as e:
+        logger.error(f"❌ 钉钉推送异常: {str(e)[:50]}")
 
 # ======================== 主逻辑 ========================
 def main():
@@ -395,7 +509,9 @@ def main():
 
     if is_trading_day():
         mr, tips, mode = get_market_status()
+        logger.info(f"📊 市场状态: {tips}，使用模式: {mode.__name__ if hasattr(mode, '__name__') else 'T1_MODE'}")
         buy, watch = scan(mr, mode)
+        logger.info(f"🔍 扫描完成，选出 {len(buy)} 只符合条件的股票")
         msg = build_msg(buy, watch, tips, time_type)
         send_feishu(msg)
         send_dingtalk(msg)
