@@ -23,8 +23,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 飞书 Webhook (替换成你自己的有效地址！！！)
-FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/你的飞书Webhook"
+# 飞书 Webhook
+FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/7e8c7d35-382e-43de-8479-0434921d338c"
 
 # 钉钉配置
 DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=8cd6832317216fdfaca1d2acba57c11e3024f20921365804ba96444f7945b949"
@@ -59,7 +59,6 @@ def get_standard_now():
     standard_timestamp = t.time() + TIME_OFFSET
     return datetime.fromtimestamp(standard_timestamp, tz=BJ_TZ)
 
-# 判断当前属于哪个推送时段
 def get_time_type():
     now = get_standard_now()
     h = now.hour
@@ -97,8 +96,8 @@ def is_trading_day():
         return True
     return True
 
-# ======================== 【严格化】T+1专属核心参数 ========================
-SELECTION_TOP_N = 3
+# ======================== 【大幅放宽】T+1核心选股参数（解决选不出票） ========================
+SELECTION_TOP_N = 5    # 推荐数量从3只增加到5只
 HIST_DAYS = 30
 CAPITAL = 10000
 MAX_PRICE = 35
@@ -106,114 +105,101 @@ TRADING_COST_RATE = 0.0015
 MIN_PROFIT_COVER = 0.01
 SINGLE_MAX_RISK = 250
 
-# 选股参数
+# 🔥 核心优化：全模式放宽筛选门槛，大幅提高出票率
 T1_MODE = {
-    "win_loss_ratio_min": 1.2,
-    "day_change_min": -0.02,
-    "day_change_max": 0.06,
-    "volume_ratio_min": 1.0,
-    "turnover_min": 3,
-    "turnover_max": 20,
-    "open_gap_max": 0.03,
+    "win_loss_ratio_min": 1.0,    # 盈亏比降低
+    "day_change_min": -0.04,      # 跌幅放宽到-4%
+    "day_change_max": 0.08,       # 涨幅放宽到8%
+    "volume_ratio_min": 0.7,      # 量比降至0.7
+    "turnover_min": 2,            # 换手率2%起步
+    "turnover_max": 25,           # 换手率上限25%
+    "open_gap_max": 0.05,         # 高开缺口放宽
     "trend_up_required": True,
-    "rsi_min": 30,
-    "rsi_max": 70,
-    "macd_positive": True
+    "rsi_min": 20,                # RSI范围大幅放宽
+    "rsi_max": 80,
+    "macd_positive": False        # 取消MACD必须为正
 }
 
 NORMAL_MODE = {
-    "win_loss_ratio_min": 1.3,
-    "day_change_min": -0.02,
-    "day_change_max": 0.05,
-    "volume_ratio_min": 0.8,
-    "assist_conds_min": 1,
-    "trend_up_required": True,
-    "rsi_min": 35,
-    "rsi_max": 65,
-    "macd_positive": True
-}
-
-WEAK_MODE = {
-    "win_loss_ratio_min": 1.1,
-    "day_change_min": -0.03,
-    "day_change_max": 0.05,
+    "win_loss_ratio_min": 0.9,
+    "day_change_min": -0.05,
+    "day_change_max": 0.07,
     "volume_ratio_min": 0.5,
     "assist_conds_min": 0,
     "trend_up_required": True,
-    "rsi_min": 25,
-    "rsi_max": 75,
+    "rsi_min": 20,
+    "rsi_max": 80,
+    "macd_positive": False
+}
+
+WEAK_MODE = {
+    "win_loss_ratio_min": 0.8,
+    "day_change_min": -0.06,
+    "day_change_max": 0.06,
+    "volume_ratio_min": 0.3,     # 弱势量比低至0.3
+    "assist_conds_min": 0,
+    "trend_up_required": False,  # 弱势取消趋势要求
+    "rsi_min": 15,
+    "rsi_max": 85,
     "macd_positive": False
 }
 
 # ======================== 行业估值规则 ========================
 INDUSTRY_PE_RULES = {
-    "银行": {"pe_max": 12, "pb_max": 1.2},
-    "保险": {"pe_max": 15, "pb_max": 2.0},
-    "证券": {"pe_max": 25, "pb_max": 2.5},
-    "煤炭": {"pe_max": 35, "pb_max": 3.0},
-    "石油天然气": {"pe_max": 70, "pb_max": 4.5},
-    "钢铁": {"pe_max": 25, "pb_max": 2.0},
-    "有色": {"pe_max": 40, "pb_max": 3.5},
-    "化工": {"pe_max": 30, "pb_max": 3.0},
-    "医药生物": {"pe_max": 50, "pb_max": 5.0},
-    "食品饮料": {"pe_max": 40, "pb_max": 6.0},
-    "零售": {"pe_max": 30, "pb_max": 3.0},
-    "计算机": {"pe_max": 70, "pb_max": 6.0},
-    "电子": {"pe_max": 55, "pb_max": 5.0},
-    "国防军工": {"pe_max": 80, "pb_max": 5.0},
-    "通信": {"pe_max": 45, "pb_max": 4.0},
-    "电力": {"pe_max": 25, "pb_max": 2.5},
-    "交通运输": {"pe_max": 20, "pb_max": 2.0},
-    "建筑装饰": {"pe_max": 15, "pb_max": 1.5},
-    "半导体": {"pe_max": 80, "pb_max": 6.0},
-    "新能源": {"pe_max": 60, "pb_max": 5.0},
+    "银行": {"pe_max": 12, "pb_max": 1.2}, "保险": {"pe_max": 15, "pb_max": 2.0},
+    "证券": {"pe_max": 25, "pb_max": 2.5}, "煤炭": {"pe_max": 35, "pb_max": 3.0},
+    "石油天然气": {"pe_max": 70, "pb_max": 4.5}, "钢铁": {"pe_max": 25, "pb_max": 2.0},
+    "有色": {"pe_max": 40, "pb_max": 3.5}, "化工": {"pe_max": 30, "pb_max": 3.0},
+    "医药生物": {"pe_max": 50, "pb_max": 5.0}, "食品饮料": {"pe_max": 40, "pb_max": 6.0},
+    "零售": {"pe_max": 30, "pb_max": 3.0}, "计算机": {"pe_max": 70, "pb_max": 6.0},
+    "电子": {"pe_max": 55, "pb_max": 5.0}, "国防军工": {"pe_max": 80, "pb_max": 5.0},
+    "通信": {"pe_max": 45, "pb_max": 4.0}, "电力": {"pe_max": 25, "pb_max": 2.5},
+    "交通运输": {"pe_max": 20, "pb_max": 2.0}, "建筑装饰": {"pe_max": 15, "pb_max": 1.5},
+    "半导体": {"pe_max": 80, "pb_max": 6.0}, "新能源": {"pe_max": 60, "pb_max": 5.0},
     "其他": {"pe_max": 50, "pb_max": 5.0}
 }
 
 FUNDAMENTAL_RED_LINE = {
-    "market_cap_min": 80,
-    "turnover_min": 3,
-    "turnover_max": 20,
-    "avg_volume_min": 5000
+    "market_cap_min": 50,    # 市值门槛降低
+    "turnover_min": 2,
+    "turnover_max": 25,
+    "avg_volume_min": 3000   # 成交量门槛降低
 }
 
-# ======================== 【保底银行股】低风险兜底 ========================
+# ======================== 保底银行股 ========================
 GUARANTEE_BANK_STOCKS = {
-    "601398.SS": "工商银行",
-    "601939.SS": "建设银行",
-    "601288.SS": "农业银行",
-    "601838.SS": "成都银行"
+    "601398.SS": "工商银行", "601939.SS": "建设银行",
+    "601288.SS": "农业银行", "601838.SS": "成都银行"
 }
 
-# ======================== 股票池 ========================
+# ======================== 【新增】你的专属股票池（完整加入） ========================
 T1_POOL = {
-    "600028.SS": "中国石化", "600023.SS": "浙能电力", "600726.SS": "华电能源",
-    "601016.SS": "节能风电", "600968.SS": "海油发展", "000968.SZ": "蓝焰控股",
-    "600795.SS": "国电电力", "600011.SS": "华能国际", "600026.SS": "中远海能",
-    "600279.SS": "重庆港", "601006.SS": "大秦铁路", "001872.SZ": "招商港口",
-    "600017.SS": "日照港", "600428.SS": "中远海特", "600332.SS": "白云山",
-    "000999.SZ": "华润三九", "600566.SS": "济川药业", "000538.SZ": "云南白药",
-    "600572.SS": "康恩贝", "000989.SZ": "九芝堂", "000997.SZ": "新大陆",
-    "002027.SZ": "分众传媒", "002152.SZ": "广电运通", "000100.SZ": "TCL科技",
+    # 你指定的核心股票
+    "601016.SS": "节能风电", "000767.SZ": "晋控电力", "600905.SS": "三峡能源",
+    "601001.SS": "晋控煤业", "601898.SS": "中煤能源", "600026.SS": "中远海能",
+    "600018.SS": "上港集团", "601668.SS": "中国建筑", "601390.SS": "中国中铁",
+    "000725.SZ": "京东方A", "000100.SZ": "TCL科技", "600028.SS": "中国石化",
+    "601068.SS": "中铝国际", "000938.SZ": "紫光股份", "002384.SZ": "东山精密",
+    "002129.SZ": "中环股份", "600151.SS": "航天机电", "600343.SS": "航天动力",
+    "600879.SS": "航天电子", "002389.SZ": "航天彩虹", "600183.SS": "生益科技",
+    "600360.SS": "华微电子",
+
+    # 原有保留股票
+    "600023.SS": "浙能电力", "600726.SS": "华电能源", "600795.SS": "国电电力",
+    "600011.SS": "华能国际", "600279.SS": "重庆港", "601006.SS": "大秦铁路",
+    "001872.SZ": "招商港口", "600017.SS": "日照港", "600428.SS": "中远海特",
+    "600332.SS": "白云山", "000999.SZ": "华润三九", "600566.SS": "济川药业",
+    "000538.SZ": "云南白药", "600572.SS": "康恩贝", "000989.SZ": "九芝堂",
+    "000997.SZ": "新大陆", "002027.SZ": "分众传媒", "002152.SZ": "广电运通",
     "002056.SZ": "横店东磁", "601225.SS": "陕西煤业", "000830.SZ": "鲁西化工",
-    "600426.SS": "华鲁恒升", "600362.SS": "江西铜业", "601933.SS": "永辉超市",
-    "002281.SZ": "光迅科技", "300308.SZ": "中际旭创", "300394.SZ": "天孚通信",
-    "000988.SZ": "华工科技", "600487.SS": "亨通光电", "002491.SZ": "通鼎互联",
-    "600584.SS": "长电科技", "002156.SZ": "通富微电", "603501.SS": "韦尔股份",
-    "002049.SZ": "紫光国微", "600171.SS": "上海贝岭", "002185.SZ": "华天科技",
-    "002594.SZ": "比亚迪", "300750.SZ": "宁德时代", "600549.SS": "厦门钨业",
-    "002460.SZ": "赣锋锂业", "002466.SZ": "天齐锂业", "600478.SS": "科力远",
-    "002747.SZ": "埃斯顿", "300024.SZ": "机器人", "601717.SS": "郑煤机",
-    "002559.SZ": "亚威股份", "002248.SZ": "华东数控",
-    "600019.SS": "宝钢股份", "000932.SZ": "华菱钢铁", "601668.SS": "中国建筑",
-    "601390.SS": "中国中铁", "601186.SS": "中国铁建"
+    "600426.SS": "华鲁恒升", "600362.SS": "江西铜业", "601933.SS": "永辉超市"
 }
 
 MY_STOCKS = {
     "600726.SS": "华电能源", "601016.SS": "节能风电", "600023.SS": "浙能电力",
     "600028.SS": "中国石化", "600968.SS": "海油发展", "000968.SZ": "蓝焰控股",
-    "002132.SZ": "恒星科技",
-    "002281.SZ": "光迅科技", "600584.SS": "长电科技", "002594.SZ": "比亚迪"
+    "002132.SZ": "恒星科技", "002281.SZ": "光迅科技", "600584.SS": "长电科技",
+    "002594.SZ": "比亚迪"
 }
 
 # ======================== 工具函数 ========================
@@ -250,7 +236,6 @@ def calc_technical_indicators(df, mode):
     ma5_vol = volume.rolling(5).mean()
 
     vol_trend = volume.iloc[-1] > volume.iloc[-2]
-
     delta = close.diff()
     gain, loss = delta.clip(lower=0).rolling(14).mean(), (-delta.clip(upper=0)).rolling(14).mean()
     rs = gain / loss.replace(0, np.nan)
@@ -375,7 +360,7 @@ def get_stock_data(s, n, t_type, mr, mode):
         logger.debug(f"获取股票数据失败 {s} {n}: {str(e)[:50]}")
         return None
 
-# ======================== 扫描 + 银行股保底 ========================
+# ======================== 扫描选股 ========================
 def scan(mr, mode):
     res, watch = [], []
     pool = {**T1_POOL, **MY_STOCKS}
@@ -392,7 +377,6 @@ def scan(mr, mode):
 
     res = sorted(res, key=lambda x:x["total_score"], reverse=True)[:SELECTION_TOP_N]
 
-    # 无推荐 → 自动选银行股保底
     if len(res) == 0:
         logger.info("⚠️ 今日无符合条件标的，自动启用【银行股保底】")
         bank_items = list(GUARANTEE_BANK_STOCKS.items())
@@ -460,9 +444,9 @@ def build_msg(buy, watch, tips, time_type):
 """
     return msg[:1800]
 
-# ======================== 【优化修复】飞书推送（稳定版） ========================
+# ======================== 飞书推送 ========================
 def send_feishu(msg):
-    if not FEISHU_WEBHOOK or FEISHU_WEBHOOK.endswith("你的飞书Webhook"):
+    if not FEISHU_WEBHOOK:
         logger.error("❌ 飞书Webhook未配置，跳过推送")
         return
     if not msg or len(msg.strip()) == 0:
@@ -475,7 +459,6 @@ def send_feishu(msg):
         "content": {"text": msg}
     }
 
-    # 重试2次，解决网络波动问题
     for retry in range(2):
         try:
             response = requests.post(
