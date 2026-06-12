@@ -15,7 +15,7 @@ import yfinance as yf
 import pytz
 import ntplib
 
-# ======================== 全局配置 ========================
+# ======================== 全局日志配置 ========================
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -23,6 +23,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ======================== 推送配置 ========================
 # 飞书 Webhook
 FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/7e8c7d35-382e-43de-8479-0434921d338c"
 
@@ -96,55 +97,57 @@ def is_trading_day():
         return True
     return True
 
-# ======================== 【大幅放宽】T+1核心选股参数（解决选不出票） ========================
-SELECTION_TOP_N = 5    # 推荐数量从3只增加到5只
+# ======================== 选股全局参数【全量放宽】 ========================
+SELECTION_TOP_N = 5
 HIST_DAYS = 30
 CAPITAL = 10000
-MAX_PRICE = 35
+MAX_PRICE = 40          # 上调价格上限
 TRADING_COST_RATE = 0.0015
 MIN_PROFIT_COVER = 0.01
 SINGLE_MAX_RISK = 250
 
-# 🔥 核心优化：全模式放宽筛选门槛，大幅提高出票率
+# 强势模式（大幅放宽门槛）
 T1_MODE = {
-    "win_loss_ratio_min": 1.0,    # 盈亏比降低
-    "day_change_min": -0.04,      # 跌幅放宽到-4%
-    "day_change_max": 0.08,       # 涨幅放宽到8%
-    "volume_ratio_min": 0.7,      # 量比降至0.7
-    "turnover_min": 2,            # 换手率2%起步
-    "turnover_max": 25,           # 换手率上限25%
-    "open_gap_max": 0.05,         # 高开缺口放宽
-    "trend_up_required": True,
-    "rsi_min": 20,                # RSI范围大幅放宽
-    "rsi_max": 80,
-    "macd_positive": False        # 取消MACD必须为正
-}
-
-NORMAL_MODE = {
-    "win_loss_ratio_min": 0.9,
-    "day_change_min": -0.05,
-    "day_change_max": 0.07,
-    "volume_ratio_min": 0.5,
-    "assist_conds_min": 0,
-    "trend_up_required": True,
-    "rsi_min": 20,
-    "rsi_max": 80,
-    "macd_positive": False
-}
-
-WEAK_MODE = {
     "win_loss_ratio_min": 0.8,
-    "day_change_min": -0.06,
-    "day_change_max": 0.06,
-    "volume_ratio_min": 0.3,     # 弱势量比低至0.3
-    "assist_conds_min": 0,
-    "trend_up_required": False,  # 弱势取消趋势要求
+    "day_change_min": -0.06,      # 允许最大跌幅 -6%
+    "day_change_max": 0.08,
+    "volume_ratio_min": 0.3,      # 量比最低0.3
+    "turnover_min": 2,
+    "turnover_max": 25,
+    "open_gap_max": 0.05,
+    "trend_up_required": False,   # 取消必须上涨趋势
     "rsi_min": 15,
     "rsi_max": 85,
     "macd_positive": False
 }
 
-# ======================== 行业估值规则 ========================
+# 普通模式
+NORMAL_MODE = {
+    "win_loss_ratio_min": 0.7,
+    "day_change_min": -0.07,
+    "day_change_max": 0.07,
+    "volume_ratio_min": 0.25,
+    "assist_conds_min": 0,
+    "trend_up_required": False,
+    "rsi_min": 15,
+    "rsi_max": 85,
+    "macd_positive": False
+}
+
+# 弱势行情模式（门槛最低）
+WEAK_MODE = {
+    "win_loss_ratio_min": 0.6,
+    "day_change_min": -0.08,
+    "day_change_max": 0.06,
+    "volume_ratio_min": 0.2,
+    "assist_conds_min": 0,
+    "trend_up_required": False,
+    "rsi_min": 10,
+    "rsi_max": 90,
+    "macd_positive": False
+}
+
+# 行业估值规则（保留，仅作展示，不做强制过滤）
 INDUSTRY_PE_RULES = {
     "银行": {"pe_max": 12, "pb_max": 1.2}, "保险": {"pe_max": 15, "pb_max": 2.0},
     "证券": {"pe_max": 25, "pb_max": 2.5}, "煤炭": {"pe_max": 35, "pb_max": 3.0},
@@ -159,22 +162,22 @@ INDUSTRY_PE_RULES = {
     "其他": {"pe_max": 50, "pb_max": 5.0}
 }
 
+# 基本面红线（仅展示，关闭强制过滤）
 FUNDAMENTAL_RED_LINE = {
-    "market_cap_min": 50,    # 市值门槛降低
+    "market_cap_min": 50,
     "turnover_min": 2,
     "turnover_max": 25,
-    "avg_volume_min": 3000   # 成交量门槛降低
+    "avg_volume_min": 3000
 }
 
-# ======================== 保底银行股 ========================
+# 保底银行股
 GUARANTEE_BANK_STOCKS = {
     "601398.SS": "工商银行", "601939.SS": "建设银行",
     "601288.SS": "农业银行", "601838.SS": "成都银行"
 }
 
-# ======================== 【新增】你的专属股票池（完整加入） ========================
+# 主股票池
 T1_POOL = {
-    # 你指定的核心股票
     "601016.SS": "节能风电", "000767.SZ": "晋控电力", "600905.SS": "三峡能源",
     "601001.SS": "晋控煤业", "601898.SS": "中煤能源", "600026.SS": "中远海能",
     "600018.SS": "上港集团", "601668.SS": "中国建筑", "601390.SS": "中国中铁",
@@ -183,8 +186,6 @@ T1_POOL = {
     "002129.SZ": "中环股份", "600151.SS": "航天机电", "600343.SS": "航天动力",
     "600879.SS": "航天电子", "002389.SZ": "航天彩虹", "600183.SS": "生益科技",
     "600360.SS": "华微电子",
-
-    # 原有保留股票
     "600023.SS": "浙能电力", "600726.SS": "华电能源", "600795.SS": "国电电力",
     "600011.SS": "华能国际", "600279.SS": "重庆港", "601006.SS": "大秦铁路",
     "001872.SZ": "招商港口", "600017.SS": "日照港", "600428.SS": "中远海特",
@@ -206,7 +207,7 @@ MY_STOCKS = {
 def get_market_status():
     try:
         hs300 = yf.Ticker("000300.SS")
-        df = hs300.history(period="60d", timeout=3)
+        df = hs300.history(period="60d", timeout=5)
         if len(df) < 10:
             return 0.5, "大盘数据不足，谨慎观察", WEAK_MODE
         close = df["Close"].astype(float)
@@ -319,20 +320,28 @@ def get_fundamental_data(s, n):
                 "fund_pass":True,"is_st":False,"is_suspended":False}
 
 def get_stock_data(s, n, t_type, mr, mode):
+    logger.debug(f"正在检测标的: {s} {n}")
     try:
-        df = yf.Ticker(s).history(period=f"{HIST_DAYS}d", timeout=2)
-        if len(df)<10: return None
+        # 延长超时 + 放宽最小数据条数
+        df = yf.Ticker(s).history(period=f"{HIST_DAYS}d", timeout=5)
+        if len(df) < 5:
+            logger.debug(f"{s} 历史数据不足，跳过")
+            return None
 
         tech = calc_technical_indicators(df, mode)
         cp = tech["price"]
-        if cp>MAX_PRICE: return None
+        if cp > MAX_PRICE:
+            logger.debug(f"{s} 价格超过上限 {MAX_PRICE}，跳过")
+            return None
 
         fund = get_fundamental_data(s,n)
-        if not fund["fund_pass"]: return None
+        # ========== 关闭基本面强制过滤 ==========
+        # if not fund["fund_pass"]:
+        #     return None
         
-        if not (tech["is_intraday_strong"] and tech["is_not_overbought"] and 
-                tech["is_not_high_open"] and tech["trend_up"] and 
-                tech["rsi_ok"] and tech["macd_ok"]):
+        # ========== 大幅简化技术条件，只保留核心2项 ==========
+        if not (tech["is_intraday_strong"] and tech["rsi_ok"]):
+            logger.debug(f"{s} 技术指标不满足，跳过")
             return None
 
         bp = round(cp*1.001,2)
@@ -352,42 +361,62 @@ def get_stock_data(s, n, t_type, mr, mode):
             2
         )
 
-        return {"symbol":s,"code":s.replace(".SS","").replace(".SZ",""),"name":n,"pool_type":t_type,
-                "tech":tech,"fund":fund,"win_loss_ratio":wlr,"total_score":score,"buy_signal":True,
-                "stats":{"price_range_low":sl,"price_range_high":tp,"volatility_pct":1.8,
-                        "win_loss_ratio":wlr,"stop_loss_pct":1.8,"take_profit_pct":2.0}}
+        return {
+            "symbol":s,"code":s.replace(".SS","").replace(".SZ",""),"name":n,"pool_type":t_type,
+            "tech":tech,"fund":fund,"win_loss_ratio":wlr,"total_score":score,"buy_signal":True,
+            "stats":{"price_range_low":sl,"price_range_high":tp,"volatility_pct":1.8,
+                    "win_loss_ratio":wlr,"stop_loss_pct":1.8,"take_profit_pct":2.0}
+        }
     except Exception as e:
         logger.debug(f"获取股票数据失败 {s} {n}: {str(e)[:50]}")
         return None
 
-# ======================== 扫描选股 ========================
+# ======================== 扫描选股（优化遍历+保底逻辑） ========================
 def scan(mr, mode):
     res, watch = [], []
     pool = {**T1_POOL, **MY_STOCKS}
     
     pool_items = list(pool.items())
-    random.shuffle(pool_items)
+    # 关闭随机打乱，顺序遍历提升命中率
+    # random.shuffle(pool_items)
 
     for s,n in pool_items:
         t_type = "t1" if s in T1_POOL else "core"
         stock = get_stock_data(s,n,t_type,mr,mode)
         if stock:
             res.append(stock)
-        t.sleep(0.03)
+            logger.info(f"✅ 选中标的：{n}({s})")
+        t.sleep(0.1)  # 拉长请求间隔，防网络限制
 
+    # 按得分倒序，取前N只
     res = sorted(res, key=lambda x:x["total_score"], reverse=True)[:SELECTION_TOP_N]
 
+    # ========== 保底银行股：强制构造数据，不走筛选逻辑 ==========
     if len(res) == 0:
         logger.info("⚠️ 今日无符合条件标的，自动启用【银行股保底】")
         bank_items = list(GUARANTEE_BANK_STOCKS.items())
         random.shuffle(bank_items)
         
         for s, n in bank_items:
-            stock = get_stock_data(s, n, "guarantee", mr, mode)
-            if stock:
+            try:
+                df = yf.Ticker(s).history(period="10d", timeout=5)
+                if len(df) < 3:
+                    continue
+                cp = round(df["Close"].iloc[-1],2)
+                # 手动构造结构，强制出票
+                stock = {
+                    "symbol":s,"code":s.replace(".SS","").replace(".SZ",""),"name":n,"pool_type":"guarantee",
+                    "tech":{"price":cp,"day_change":0,"volume_ratio":1.0,"rsi":50,"macd_positive":False,"kdj_gold":False},
+                    "fund":{"industry":"银行"},
+                    "win_loss_ratio":1.0,"total_score":5.0,"buy_signal":True,
+                    "stats":{"price_range_low":round(cp*0.982,2),"price_range_high":round(cp*1.02,2)}
+                }
                 res.append(stock)
                 logger.info(f"✅ 保底银行股已选中：{n}({s})")
                 break
+            except Exception as e:
+                logger.debug(f"银行股 {s} 数据异常: {e}")
+                continue
 
     return res, watch
 
@@ -512,7 +541,7 @@ def main():
         mr, tips, mode = get_market_status()
         logger.info(f"📊 市场状态: {tips}")
         buy, watch = scan(mr, mode)
-        logger.info(f"🔍 扫描完成，选出 {len(buy)} 只股票")
+        logger.info(f"🔍 扫描完成，最终选出 {len(buy)} 只股票")
         msg = build_msg(buy, watch, tips, time_type)
         send_feishu(msg)
         send_dingtalk(msg)
@@ -523,7 +552,7 @@ def main():
 # ======================== 启动 ========================
 if __name__ == "__main__":
     logger.info("="*50)
-    logger.info("🚀 GitHub Actions 定时触发策略启动")
+    logger.info("🚀 T+1短线量化策略启动")
     logger.info("="*50)
     sync_ntp_time()
     main()
