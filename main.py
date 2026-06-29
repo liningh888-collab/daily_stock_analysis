@@ -84,7 +84,7 @@ def is_trading_day():
         return True
     return True
 
-# ======================== 选股参数 ========================
+# ======================== 选股参数【放宽过滤阈值】 ========================
 SELECTION_TOP_N = 3
 HIST_DAYS = 18
 MAX_PRICE = 48
@@ -95,10 +95,10 @@ SINGLE_MAX_RISK = 250
 BASE_MODE = {
     "win_loss_ratio_min": 0.4,
     "day_change_min": 0,
-    "day_change_max": 8,
-    "volume_ratio_min": 0.15,
-    "turnover_min": 1,
-    "turnover_max": 22,
+    "day_change_max": 12,
+    "volume_ratio_min": 0.1,
+    "turnover_min": 0.5,
+    "turnover_max": 25,
     "open_gap_max": 0.1,
     "trend_up_required": False,
     "rsi_min": 3,
@@ -231,7 +231,7 @@ def fetch_data(code):
         logger.debug(f"[{code}] 数据获取失败: {e}")
         return None
 
-# ======================== 全新优化指标计算+精细化打分（修复ST报错） ========================
+# ======================== 指标计算（大幅放宽过滤） ========================
 def calc_indicators(df, mode):
     close = df["Close"]
     high = df["High"]
@@ -274,28 +274,16 @@ def calc_indicators(df, mode):
     amplitude = round(((high.iloc[-1] - low.iloc[-1]) / open_price) * 100, 2)
     turnover = round((volume.iloc[-1] / (close.iloc[-1] * 100000000)) * 100, 2)
 
-    # 风控过滤条件
+    # 风控过滤条件【大幅放宽】
     rsi_ok = mode["rsi_min"] <= rsi <= mode["rsi_max"]
     price_ok = now_price <= MAX_PRICE
     vol_ok = vol_ratio >= mode["volume_ratio_min"]
     rise_ok = day_chg > 0
-    amp_ok = amplitude <= 9
+    amp_ok = amplitude <= 12
     turnover_ok = mode["turnover_min"] <= turnover <= mode["turnover_max"]
-    high_filter = now_price <= ma20.iloc[-1] * 1.12
+    high_filter = now_price <= ma20.iloc[-1] * 1.18
 
-    # 长上影过滤
-    upper_shadow = high.iloc[-1] - now_price
-    full_range = high.iloc[-1] - low.iloc[-1]
-    shadow_ok = True
-    if full_range > 0 and (upper_shadow / full_range) > 0.3:
-        shadow_ok = False
-
-    # 近三日累计跌幅过滤
-    three_day_chg = ((close.iloc[-1] - close.iloc[-4]) / close.iloc[-4]) * 100
-    three_day_ok = three_day_chg > -6
-
-    # ========== 新增打分维度 ==========
-    # 1. 涨幅梯度分
+    # ========== 打分维度不变 ==========
     if day_chg >= 1.5:
         rise_score = 1.5
     elif day_chg >= 0.8:
@@ -303,22 +291,14 @@ def calc_indicators(df, mode):
     else:
         rise_score = 0.2
 
-    # 2. 5日线趋势加分
     trend5_up = ma5.iloc[-1] > ma5.iloc[-2]
     trend_score = 1.0 if trend5_up else 0
-
-    # 3. MACD零轴多头加分
     macd_extra = 0.8 if macd_pos else 0
-
-    # 4. 连续5日放量加分
     avg_5vol = volume.iloc[-5:].mean() / ma5_vol.iloc[-1]
     vol_cont_score = 0.5 if avg_5vol > 0.8 else 0
-
-    # 5. 日内承接（收盘价高于日内均价）
     day_avg_price = (high.iloc[-1] + low.iloc[-1] + open_p.iloc[-1]) / 3
     support_score = 0.3 if now_price > day_avg_price else 0
 
-    # 全新总分公式：量比加权，均衡各维度
     total_score = (vol_ratio * 1.2) + (1.5 if macd_gold else 0) + (1.5 if kdj_gold else 0) \
                   + rise_score + trend_score + macd_extra + vol_cont_score + support_score
 
@@ -332,35 +312,25 @@ def calc_indicators(df, mode):
         "kdj_gold": kdj_gold,
         "macd_gold": macd_gold,
         "total_score": round(total_score, 2),
-        # 所有过滤开关
         "rsi_ok": rsi_ok,
         "price_ok": price_ok,
         "vol_ok": vol_ok,
         "rise_ok": rise_ok,
         "amp_ok": amp_ok,
         "turnover_ok": turnover_ok,
-        "high_filter": high_filter,
-        "shadow_ok": shadow_ok,
-        "three_day_ok": three_day_ok
+        "high_filter": high_filter
     }
 
-# ======================== 个股筛选（修复ST判断逻辑） ========================
+# ======================== 个股筛选 ========================
 def parse_stock(code, name, mode):
-    # 直接用股票名称/代码过滤ST，不再依赖df列名
-    st_filter = False
-    if "ST" in code or "ST" in name:
-        st_filter = False
-    else:
-        st_filter = True
-
+    st_filter = False if ("ST" in code or "ST" in name) else True
     df = fetch_data(code)
     if df is None:
         return None
     ind = calc_indicators(df, mode)
-    # 全部过滤条件同时满足才保留
+    # 移除长上影、三日跌幅两条严格过滤
     all_ok = (ind["rsi_ok"] and ind["price_ok"] and ind["vol_ok"] and ind["rise_ok"]
-              and ind["amp_ok"] and ind["turnover_ok"] and ind["high_filter"]
-              and ind["shadow_ok"] and ind["three_day_ok"] and st_filter)
+              and ind["amp_ok"] and ind["turnover_ok"] and ind["high_filter"] and st_filter)
     if not all_ok:
         return None
 
@@ -374,16 +344,8 @@ def parse_stock(code, name, mode):
         "name": name,
         "pool_type": "normal",
         "tech": ind,
-        "fund": {
-            "industry": "综合",
-            "market_cap": 800.0,
-            "pe": 18.0,
-            "pb": 1.8
-        },
-        "stats": {
-            "price_range_low": stop_loss,
-            "price_range_high": take_profit
-        },
+        "fund": {"industry": "综合", "market_cap": 800.0, "pe": 18.0, "pb": 1.8},
+        "stats": {"price_range_low": stop_loss, "price_range_high": take_profit},
         "total_score": ind["total_score"]
     }
 
@@ -417,9 +379,8 @@ def scan_stocks(mode):
             result.append(stock_info)
             logger.info(f"✅ 合格上涨标的：{name}({code}) 涨幅+{stock_info['tech']['day_change']} 总分:{stock_info['total_score']}")
         t.sleep(0.12)
-    # 降序排序
+    # 按总分从高到低排序，取前3只
     result = sorted(result, key=lambda x: x["total_score"], reverse=True)
-    # 不足3只，银行兜底补充
     need_fill = SELECTION_TOP_N - len(result)
     if need_fill > 0:
         logger.info(f"⚠️ 仅筛选到{len(result)}只合格标的，补充{need_fill}只银行保底凑满3只")
@@ -438,27 +399,10 @@ def scan_stocks(mode):
                 "code": code.replace(".SS", "").replace(".SZ", ""),
                 "name": name,
                 "pool_type": "guarantee",
-                "tech": {
-                    "price": price,
-                    "day_change": 0.12,
-                    "volume_ratio": 1.0,
-                    "turnover": 1.5,
-                    "rsi": 50,
-                    "macd_positive": False,
-                    "kdj_gold": False,
-                    "macd_gold": False,
-                    "total_score": 3.5
-                },
-                "fund": {
-                    "industry": "银行",
-                    "market_cap": 9999.99,
-                    "pe": 10.0,
-                    "pb": 1.1
-                },
-                "stats": {
-                    "price_range_low": round(price * 0.982, 2),
-                    "price_range_high": round(price * 1.02, 2)
-                },
+                "tech": {"price": price, "day_change": 0.12, "volume_ratio": 1.0, "turnover": 1.5, "rsi": 50,
+                         "macd_positive": False, "kdj_gold": False, "macd_gold": False, "total_score": 3.5},
+                "fund": {"industry": "银行", "market_cap": 9999.99, "pe": 10.0, "pb": 1.1},
+                "stats": {"price_range_low": round(price * 0.982, 2), "price_range_high": round(price * 1.02, 2)},
                 "total_score": 3.5
             })
             add_cnt += 1
@@ -468,18 +412,12 @@ def scan_stocks(mode):
 # ======================== 消息组装 ========================
 def build_message(stock_list, market_desc, time_type):
     now = get_standard_now().strftime("%Y-%m-%d %H:%M:%S")
-    title_map = {
-        "morning": "【🤖 T+1量化 · 早盘5:40前瞻】",
-        "open": "【🤖 T+1量化 · 9:00开盘参考】",
-        "close": "【🤖 T+1量化 · 15:00收盘总结】",
-        "normal": "【🤖 T+1短线量化算法 · 日常推送】"
-    }
-    tip_map = {
-        "morning": "早盘前瞻：提前筛选当日备选标的，等待尾盘定点介入",
-        "open": "开盘参考：集合竞价结束，观察量能与开盘溢价",
-        "close": "收盘总结：当日标的复盘，明日持仓隔日处理规划",
-        "normal": "尾盘14:55左右买入，次日14:45前清仓"
-    }
+    title_map = {"morning": "【🤖 T+1量化 · 早盘5:40前瞻】", "open": "【🤖 T+1量化 · 9:00开盘参考】",
+                 "close": "【🤖 T+1量化 · 15:00收盘总结】", "normal": "【🤖 T+1短线量化算法 · 日常推送】"}
+    tip_map = {"morning": "早盘前瞻：提前筛选当日备选标的，等待尾盘定点介入",
+               "open": "开盘参考：集合竞价结束，观察量能与开盘溢价",
+               "close": "收盘总结：当日标的复盘，明日持仓隔日处理规划",
+               "normal": "尾盘14:55左右买入，次日14:45前清仓"}
     msg = f"""==================================================
 {title_map[time_type]}
 📅 输出时间：{now}
@@ -490,13 +428,13 @@ def build_message(stock_list, market_desc, time_type):
 1. 本内容为Python量化程序自动运算的公开行情数据，不构成投资建议。
 2. 仅用于量化技术学习、算法验证、历史数据复盘，禁止实盘交易。
 ==================================================
-【📊 T+1短线标的 · 仅保留红盘上涨个股，固定输出3只】
+【📊 T+1短线标的 · 仅保留红盘上涨个股，按总分降序取前3只】
 """
     if stock_list:
         for idx, s in enumerate(stock_list, 1):
             tag = "【保底银行股】" if s["pool_type"] == "guarantee" else ""
             msg += f"""
-【数据{idx}】{tag}{s['code']} {s['name']}
+【排名{idx}】{tag}{s['code']} {s['name']}
 💵 现价：{s['tech']['price']}元｜涨幅：+{s['tech']['day_change']}%｜量比：{s['tech']['volume_ratio']}
 📉 止损：{s['stats']['price_range_low']}元｜止盈：{s['stats']['price_range_high']}元
 📊 RSI：{s['tech']['rsi']}｜MACD：{"正" if s['tech']['macd_positive'] else "负"}｜KDJ金叉：{"是" if s['tech']['kdj_gold'] else "否"}
@@ -542,7 +480,7 @@ def send_dingtalk(msg):
 
 # ======================== 主入口 ========================
 def main():
-    logger.info("🚀 T+1短线量化【优化完整版】启动｜规则：只选涨幅为正，固定输出3只")
+    logger.info("🚀 T+1短线量化【放宽过滤版】启动｜规则：只选涨幅为正，按综合得分排名取前3")
     sync_ntp_time()
     time_type = get_time_type()
     logger.info(f"⏰ 当前时段：{time_type}")
@@ -550,7 +488,7 @@ def main():
         market_desc, run_mode = get_market_status()
         logger.info(f"📊 市场状态：{market_desc}")
         stock_result = scan_stocks(run_mode)
-        logger.info(f"🔍 最终推送 {len(stock_result)} 只上涨标的")
+        logger.info(f"🔍 筛选合格标的共{len([s for s in stock_result if s['pool_type']=='normal'])}只，最终推送3只")
         content = build_message(stock_result, market_desc, time_type)
         send_feishu(content)
         send_dingtalk(content)
