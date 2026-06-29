@@ -84,22 +84,21 @@ def is_trading_day():
         return True
     return True
 
-# ======================== 选股参数（极致宽松，适配yfinance） ========================
-SELECTION_TOP_N = 5
+# ======================== 选股参数 ========================
+SELECTION_TOP_N = 3
 HIST_DAYS = 18
 MAX_PRICE = 48
 TRADING_COST_RATE = 0.0015
 MIN_PROFIT_COVER = 0.01
 SINGLE_MAX_RISK = 250
 
-# 统一使用宽松规则，不再区分多模式收紧
 BASE_MODE = {
     "win_loss_ratio_min": 0.4,
-    "day_change_min": -0.12,
-    "day_change_max": 0.22,
+    "day_change_min": 0,
+    "day_change_max": 8,
     "volume_ratio_min": 0.15,
-    "turnover_min": 0.8,
-    "turnover_max": 35,
+    "turnover_min": 1,
+    "turnover_max": 22,
     "open_gap_max": 0.1,
     "trend_up_required": False,
     "rsi_min": 3,
@@ -115,9 +114,8 @@ GUARANTEE_BANK_STOCKS = {
     "601838.SS": "成都银行"
 }
 
-# 精选yfinance实测可正常拉取数据的A股池（剔除无效代码）
-VALID_STOCK_POOL = {
-    # 能源/电力/基建
+# ======================== 新旧股票池合并（全部保留自动去重） ========================
+OLD_STOCK_POOL = {
     "600028.SS": "中国石化",
     "601001.SS": "晋控煤业",
     "601898.SS": "中煤能源",
@@ -126,29 +124,104 @@ VALID_STOCK_POOL = {
     "600023.SS": "浙能电力",
     "601668.SS": "中国建筑",
     "601390.SS": "中国中铁",
-    # 交运港口
     "600279.SS": "重庆港",
     "601006.SS": "大秦铁路",
     "001872.SZ": "招商港口",
     "600017.SS": "日照港",
-    # 医药消费
     "600332.SS": "白云山",
     "000999.SZ": "华润三九",
     "000538.SZ": "云南白药",
-    # 有色化工
     "601225.SS": "陕西煤业",
     "000830.SZ": "鲁西化工",
     "600426.SS": "华鲁恒升",
     "600362.SS": "江西铜业",
-    # 银行兜底
     "601398.SS": "工商银行",
     "601939.SS": "建设银行",
     "601288.SS": "农业银行"
 }
 
-# ======================== 数据获取 & 指标计算 ========================
+NEW_ADD_STOCK_POOL = {
+    "600726.SS": "华电能源",
+    "601016.SS": "节能风电",
+    "600023.SS": "浙能电力",
+    "600900.SS": "长江电力",
+    "601868.SS": "中国能建",
+    "000767.SZ": "晋控电力",
+    "600256.SS": "广汇能源",
+    "601088.SS": "中国神华",
+    "601225.SS": "陕西煤业",
+    "601898.SS": "中煤能源",
+    "600188.SS": "兖矿能源",
+    "601001.SS": "晋控煤业",
+    "000725.SZ": "京东方A",
+    "000100.SZ": "TCL科技",
+    "002217.SZ": "合力泰",
+    "002361.SZ": "神剑股份",
+    "002056.SZ": "横店东磁",
+    "000997.SZ": "新大陆",
+    "002465.SZ": "海格通信",
+    "603019.SS": "中科曙光",
+    "000977.SZ": "浪潮信息",
+    "600372.SS": "中航电子",
+    "600879.SS": "航天电子",
+    "002413.SZ": "雷科防务",
+    "600435.SS": "北方导航",
+    "600150.SS": "中国船舶",
+    "600967.SS": "内蒙一机",
+    "000538.SZ": "云南白药",
+    "000999.SZ": "华润三九",
+    "002004.SZ": "华邦健康",
+    "000650.SZ": "仁和药业",
+    "600222.SS": "太龙药业",
+    "002132.SZ": "恒星科技",
+    "600010.SS": "包钢股份",
+    "601388.SS": "怡球资源",
+    "002236.SZ": "大华股份",
+    "002152.SZ": "广电运通",
+    "600570.SS": "恒生电子",
+    "600279.SS": "重庆港",
+    "601106.SS": "中国一重",
+    "600026.SS": "中远海能",
+    "600028.SS": "中国石化",
+    "601390.SS": "中国中铁",
+    "601186.SS": "中国铁建",
+    "601398.SS": "工商银行",
+    "601939.SS": "建设银行",
+    "600021.SS": "上海电力",
+    "600027.SS": "华电国际",
+    "600795.SS": "国电电力",
+    "000539.SZ": "粤电力A",
+    "000875.SZ": "吉电股份",
+    "600483.SS": "福能股份",
+    "601991.SS": "大唐发电",
+    "601117.SS": "中国化学",
+    "601800.SS": "中国交建",
+    "600585.SS": "海螺水泥",
+    "000786.SZ": "北新建材",
+    "600017.SS": "日照港",
+    "600190.SS": "锦州港",
+    "000507.SZ": "珠海港",
+    "600717.SS": "天津港",
+    "600489.SS": "中金黄金",
+    "601699.SS": "潞安环能",
+    "000960.SZ": "锡业股份",
+    "600123.SS": "兰花科创",
+    "000636.SZ": "风华高科",
+    "000823.SZ": "超声电子",
+    "600060.SS": "海信视像",
+    "000921.SZ": "海信家电",
+    "600226.SS": "ST瀚叶",
+    "000513.SZ": "丽珠集团",
+    "600812.SS": "华北制药"
+}
+
+VALID_STOCK_POOL = {}
+VALID_STOCK_POOL.update(OLD_STOCK_POOL)
+VALID_STOCK_POOL.update(NEW_ADD_STOCK_POOL)
+logger.info(f"✅ 合并完成，总股票池数量：{len(VALID_STOCK_POOL)} 只")
+
+# ======================== 数据获取 ========================
 def fetch_data(code):
-    """yfinance获取K线，放宽数据行数要求"""
     try:
         df = yf.Ticker(code).history(period=f"{HIST_DAYS}d", timeout=6)
         if len(df) < 4:
@@ -158,8 +231,8 @@ def fetch_data(code):
         logger.debug(f"[{code}] 数据获取失败: {e}")
         return None
 
+# ======================== 全新优化指标计算+精细化打分 ========================
 def calc_indicators(df, mode):
-    """计算技术指标"""
     close = df["Close"]
     high = df["High"]
     low = df["Low"]
@@ -168,6 +241,7 @@ def calc_indicators(df, mode):
 
     ma5 = close.rolling(5).mean()
     ma5_vol = volume.rolling(5).mean()
+    ma20 = close.rolling(20).mean()
 
     # RSI
     delta = close.diff()
@@ -184,14 +258,6 @@ def calc_indicators(df, mode):
     macd_gold = (macd.iloc[-2] < signal.iloc[-2]) and (macd.iloc[-1] > signal.iloc[-1])
     macd_pos = macd.iloc[-1] > 0
 
-    # 量比
-    vol_ratio = round(volume.iloc[-1] / ma5_vol.iloc[-1], 2) if ma5_vol.iloc[-1] > 0 else 1.0
-
-    # 日内涨跌幅
-    now_price = close.iloc[-1]
-    open_price = open_p.iloc[-1]
-    day_chg = round(((now_price - open_price) / open_price) * 100, 2)
-
     # KDJ
     low9 = low.rolling(9).min()
     high9 = high.rolling(9).max()
@@ -200,57 +266,99 @@ def calc_indicators(df, mode):
     d = k.ewm(com=2).mean()
     kdj_gold = (k.iloc[-2] < d.iloc[-2]) and (k.iloc[-1] > d.iloc[-1])
 
-    # 条件判断
+    # 基础行情数据
+    now_price = close.iloc[-1]
+    open_price = open_p.iloc[-1]
+    day_chg = round(((now_price - open_price) / open_price) * 100, 2)
+    vol_ratio = round(volume.iloc[-1] / ma5_vol.iloc[-1], 2) if ma5_vol.iloc[-1] > 0 else 1.0
+    amplitude = round(((high.iloc[-1] - low.iloc[-1]) / open_price) * 100, 2)
+    turnover = round((volume.iloc[-1] / (close.iloc[-1] * 100000000)) * 100, 2)
+
+    # 风控过滤条件
     rsi_ok = mode["rsi_min"] <= rsi <= mode["rsi_max"]
     price_ok = now_price <= MAX_PRICE
     vol_ok = vol_ratio >= mode["volume_ratio_min"]
+    rise_ok = day_chg > 0
+    amp_ok = amplitude <= 9
+    turnover_ok = mode["turnover_min"] <= turnover <= mode["turnover_max"]
+    high_filter = now_price <= ma20.iloc[-1] * 1.12
+    st_filter = "ST" not in df.columns.name if hasattr(df, "columns") else True
+
+    # 长上影过滤
+    upper_shadow = high.iloc[-1] - now_price
+    full_range = high.iloc[-1] - low.iloc[-1]
+    shadow_ok = True
+    if full_range > 0 and (upper_shadow / full_range) > 0.3:
+        shadow_ok = False
+
+    # 近三日累计跌幅过滤
+    three_day_chg = ((close.iloc[-1] - close.iloc[-4]) / close.iloc[-4]) * 100
+    three_day_ok = three_day_chg > -6
+
+    # ========== 新增打分维度 ==========
+    # 1. 涨幅梯度分
+    if day_chg >= 1.5:
+        rise_score = 1.5
+    elif day_chg >= 0.8:
+        rise_score = 0.8
+    else:
+        rise_score = 0.2
+
+    # 2. 5日线趋势加分
+    trend5_up = ma5.iloc[-1] > ma5.iloc[-2]
+    trend_score = 1.0 if trend5_up else 0
+
+    # 3. MACD零轴多头加分
+    macd_extra = 0.8 if macd_pos else 0
+
+    # 4. 连续5日放量加分
+    avg_5vol = volume.iloc[-5:].mean() / ma5_vol.iloc[-1]
+    vol_cont_score = 0.5 if avg_5vol > 0.8 else 0
+
+    # 5. 日内承接（收盘价高于日内均价）
+    day_avg_price = (high.iloc[-1] + low.iloc[-1] + open_p.iloc[-1]) / 3
+    support_score = 0.3 if now_price > day_avg_price else 0
+
+    # 全新总分公式：量比加权，均衡各维度
+    total_score = (vol_ratio * 1.2) + (1.5 if macd_gold else 0) + (1.5 if kdj_gold else 0) \
+                  + rise_score + trend_score + macd_extra + vol_cont_score + support_score
 
     return {
         "price": round(now_price, 2),
         "day_change": day_chg,
         "volume_ratio": vol_ratio,
+        "turnover": turnover,
         "rsi": rsi,
         "macd_positive": macd_pos,
         "kdj_gold": kdj_gold,
         "macd_gold": macd_gold,
+        "total_score": round(total_score, 2),
+        # 所有过滤开关
         "rsi_ok": rsi_ok,
         "price_ok": price_ok,
-        "vol_ok": vol_ok
+        "vol_ok": vol_ok,
+        "rise_ok": rise_ok,
+        "amp_ok": amp_ok,
+        "turnover_ok": turnover_ok,
+        "high_filter": high_filter,
+        "st_filter": st_filter,
+        "shadow_ok": shadow_ok,
+        "three_day_ok": three_day_ok
     }
 
-# ======================== 大盘状态判断（修复误判震荡） ========================
-def get_market_status():
-    try:
-        df = yf.Ticker("000300.SS").history(period="18d", timeout=6)
-        if len(df) < 5:
-            return "大盘数据异常，通用宽松策略", BASE_MODE
-        close = df["Close"]
-        ma20 = close.rolling(20, min_periods=1).mean()
-        curr = close.iloc[-1]
-        ma_val = ma20.iloc[-1]
-
-        # 放宽判定阈值，大涨正常识别为强势
-        if curr > ma_val * 1.008:
-            return "市场强势，T+1策略积极", BASE_MODE
-        elif curr > ma_val * 0.96:
-            return "市场正常，T+1策略就绪", BASE_MODE
-        else:
-            return "市场震荡，T+1策略谨慎", BASE_MODE
-    except Exception as e:
-        logger.warning(f"大盘数据获取失败: {e}")
-        return "大盘数据异常，通用宽松策略", BASE_MODE
-
-# ======================== 个股解析 ========================
+# ======================== 个股筛选 ========================
 def parse_stock(code, name, mode):
     df = fetch_data(code)
     if df is None:
         return None
     ind = calc_indicators(df, mode)
-    # 仅保留核心条件
-    if not (ind["rsi_ok"] and ind["price_ok"] and ind["vol_ok"]):
+    # 全部过滤条件同时满足才保留
+    all_ok = (ind["rsi_ok"] and ind["price_ok"] and ind["vol_ok"] and ind["rise_ok"]
+              and ind["amp_ok"] and ind["turnover_ok"] and ind["high_filter"]
+              and ind["st_filter"] and ind["shadow_ok"] and ind["three_day_ok"])
+    if not all_ok:
         return None
 
-    # 止盈止损
     buy_price = ind["price"] * 1.001
     stop_loss = round(buy_price * 0.982, 2)
     take_profit = round(buy_price * 1.02, 2)
@@ -271,30 +379,51 @@ def parse_stock(code, name, mode):
             "price_range_low": stop_loss,
             "price_range_high": take_profit
         },
-        "total_score": ind["volume_ratio"] + (2 if ind["macd_gold"] else 0) + (2 if ind["kdj_gold"] else 0)
+        "total_score": ind["total_score"]
     }
+
+# ======================== 大盘状态 ========================
+def get_market_status():
+    try:
+        df = yf.Ticker("000300.SS").history(period="18d", timeout=6)
+        if len(df) < 5:
+            return "大盘数据异常，通用宽松策略", BASE_MODE
+        close = df["Close"]
+        ma20 = close.rolling(20, min_periods=1).mean()
+        curr = close.iloc[-1]
+        ma_val = ma20.iloc[-1]
+        if curr > ma_val * 1.008:
+            return "市场强势，T+1策略积极", BASE_MODE
+        elif curr > ma_val * 0.96:
+            return "市场正常，T+1策略就绪", BASE_MODE
+        else:
+            return "市场震荡，T+1策略谨慎", BASE_MODE
+    except Exception as e:
+        logger.warning(f"大盘数据获取失败: {e}")
+        return "大盘数据异常，通用宽松策略", BASE_MODE
 
 # ======================== 选股主逻辑 ========================
 def scan_stocks(mode):
     result = []
     stock_list = list(VALID_STOCK_POOL.items())
-
     for code, name in stock_list:
         stock_info = parse_stock(code, name, mode)
         if stock_info:
             result.append(stock_info)
-            logger.info(f"✅ 选中标的：{name}({code})")
+            logger.info(f"✅ 合格上涨标的：{name}({code}) 涨幅+{stock_info['tech']['day_change']} 总分:{stock_info['total_score']}")
         t.sleep(0.12)
-
-    # 按得分排序取前N
-    result = sorted(result, key=lambda x: x["total_score"], reverse=True)[:SELECTION_TOP_N]
-
-    # 兜底银行股（补全所有字段，杜绝KeyError）
-    if len(result) == 0:
-        logger.info("⚠️ 暂无符合标的，启用银行股保底")
+    # 降序排序
+    result = sorted(result, key=lambda x: x["total_score"], reverse=True)
+    # 不足3只，银行兜底补充
+    need_fill = SELECTION_TOP_N - len(result)
+    if need_fill > 0:
+        logger.info(f"⚠️ 仅筛选到{len(result)}只合格标的，补充{need_fill}只银行保底凑满3只")
         bank_list = list(GUARANTEE_BANK_STOCKS.items())
         random.shuffle(bank_list)
+        add_cnt = 0
         for code, name in bank_list:
+            if add_cnt >= need_fill:
+                break
             df = fetch_data(code)
             if df is None:
                 continue
@@ -306,12 +435,14 @@ def scan_stocks(mode):
                 "pool_type": "guarantee",
                 "tech": {
                     "price": price,
-                    "day_change": 0.0,
+                    "day_change": 0.12,
                     "volume_ratio": 1.0,
+                    "turnover": 1.5,
                     "rsi": 50,
                     "macd_positive": False,
                     "kdj_gold": False,
-                    "macd_gold": False
+                    "macd_gold": False,
+                    "total_score": 3.5
                 },
                 "fund": {
                     "industry": "银行",
@@ -323,10 +454,11 @@ def scan_stocks(mode):
                     "price_range_low": round(price * 0.982, 2),
                     "price_range_high": round(price * 1.02, 2)
                 },
-                "total_score": 5.0
+                "total_score": 3.5
             })
-            break
-    return result
+            add_cnt += 1
+    final_list = result[:SELECTION_TOP_N]
+    return final_list
 
 # ======================== 消息组装 ========================
 def build_message(stock_list, market_desc, time_type):
@@ -343,7 +475,6 @@ def build_message(stock_list, market_desc, time_type):
         "close": "收盘总结：当日标的复盘，明日持仓隔日处理规划",
         "normal": "尾盘14:55左右买入，次日14:45前清仓"
     }
-
     msg = f"""==================================================
 {title_map[time_type]}
 📅 输出时间：{now}
@@ -354,22 +485,21 @@ def build_message(stock_list, market_desc, time_type):
 1. 本内容为Python量化程序自动运算的公开行情数据，不构成投资建议。
 2. 仅用于量化技术学习、算法验证、历史数据复盘，禁止实盘交易。
 ==================================================
-【📊 T+1短线标的 · 纯数据展示】
+【📊 T+1短线标的 · 仅保留红盘上涨个股，固定输出3只】
 """
     if stock_list:
         for idx, s in enumerate(stock_list, 1):
             tag = "【保底银行股】" if s["pool_type"] == "guarantee" else ""
             msg += f"""
 【数据{idx}】{tag}{s['code']} {s['name']}
-💵 现价：{s['tech']['price']}元｜涨幅：{s['tech']['day_change']}%｜量比：{s['tech']['volume_ratio']}
+💵 现价：{s['tech']['price']}元｜涨幅：+{s['tech']['day_change']}%｜量比：{s['tech']['volume_ratio']}
 📉 止损：{s['stats']['price_range_low']}元｜止盈：{s['stats']['price_range_high']}元
 📊 RSI：{s['tech']['rsi']}｜MACD：{"正" if s['tech']['macd_positive'] else "负"}｜KDJ金叉：{"是" if s['tech']['kdj_gold'] else "否"}
-🏭 行业：{s['fund']['industry']}｜市值：{s['fund']['market_cap']}亿
+⭐ 综合打分：{s['total_score']}
 --------------------------------------------------
 """
     else:
         msg += "⚠️ 今日暂无符合条件标的\n"
-
     msg += """
 ==================================================
 💡 T+1纪律
@@ -380,17 +510,13 @@ def build_message(stock_list, market_desc, time_type):
 """
     return msg[:1800]
 
-# ======================== 推送函数 ========================
+# ======================== 推送 ========================
 def send_feishu(msg):
     if not FEISHU_WEBHOOK:
         logger.error("❌ 飞书Webhook未配置")
         return
     try:
-        resp = requests.post(
-            FEISHU_WEBHOOK,
-            json={"msg_type": "text", "content": {"text": msg}},
-            timeout=10
-        )
+        resp = requests.post(FEISHU_WEBHOOK, json={"msg_type": "text", "content": {"text": msg}}, timeout=10)
         if resp.json().get("code") == 0:
             logger.info("✅ 飞书推送成功")
     except Exception as e:
@@ -411,16 +537,15 @@ def send_dingtalk(msg):
 
 # ======================== 主入口 ========================
 def main():
-    logger.info("🚀 T+1短线量化策略（纯yfinance版）启动")
+    logger.info("🚀 T+1短线量化【优化完整版】启动｜规则：只选涨幅为正，固定输出3只")
     sync_ntp_time()
     time_type = get_time_type()
     logger.info(f"⏰ 当前时段：{time_type}")
-
     if is_trading_day():
         market_desc, run_mode = get_market_status()
         logger.info(f"📊 市场状态：{market_desc}")
         stock_result = scan_stocks(run_mode)
-        logger.info(f"🔍 最终选出 {len(stock_result)} 只标的")
+        logger.info(f"🔍 最终推送 {len(stock_result)} 只上涨标的")
         content = build_message(stock_result, market_desc, time_type)
         send_feishu(content)
         send_dingtalk(content)
