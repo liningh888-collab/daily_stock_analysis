@@ -231,7 +231,7 @@ def fetch_data(code):
         logger.debug(f"[{code}] 数据获取失败: {e}")
         return None
 
-# ======================== 全新优化指标计算+精细化打分 ========================
+# ======================== 全新优化指标计算+精细化打分（修复ST报错） ========================
 def calc_indicators(df, mode):
     close = df["Close"]
     high = df["High"]
@@ -282,7 +282,6 @@ def calc_indicators(df, mode):
     amp_ok = amplitude <= 9
     turnover_ok = mode["turnover_min"] <= turnover <= mode["turnover_max"]
     high_filter = now_price <= ma20.iloc[-1] * 1.12
-    st_filter = "ST" not in df.columns.name if hasattr(df, "columns") else True
 
     # 长上影过滤
     upper_shadow = high.iloc[-1] - now_price
@@ -341,13 +340,19 @@ def calc_indicators(df, mode):
         "amp_ok": amp_ok,
         "turnover_ok": turnover_ok,
         "high_filter": high_filter,
-        "st_filter": st_filter,
         "shadow_ok": shadow_ok,
         "three_day_ok": three_day_ok
     }
 
-# ======================== 个股筛选 ========================
+# ======================== 个股筛选（修复ST判断逻辑） ========================
 def parse_stock(code, name, mode):
+    # 直接用股票名称/代码过滤ST，不再依赖df列名
+    st_filter = False
+    if "ST" in code or "ST" in name:
+        st_filter = False
+    else:
+        st_filter = True
+
     df = fetch_data(code)
     if df is None:
         return None
@@ -355,7 +360,7 @@ def parse_stock(code, name, mode):
     # 全部过滤条件同时满足才保留
     all_ok = (ind["rsi_ok"] and ind["price_ok"] and ind["vol_ok"] and ind["rise_ok"]
               and ind["amp_ok"] and ind["turnover_ok"] and ind["high_filter"]
-              and ind["st_filter"] and ind["shadow_ok"] and ind["three_day_ok"])
+              and ind["shadow_ok"] and ind["three_day_ok"] and st_filter)
     if not all_ok:
         return None
 
