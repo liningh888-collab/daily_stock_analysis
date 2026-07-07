@@ -388,7 +388,7 @@ def scan_stocks():
     final_list = result[:SELECTION_TOP_N]
     return final_list
 
-# ======================== 消息组装 ========================
+# ======================== 消息组装【修改版】 ========================
 def build_message(stock_list, market_desc, time_type):
     now = get_standard_now().strftime("%Y-%m-%d %H:%M:%S")
     title_map = {
@@ -398,10 +398,10 @@ def build_message(stock_list, market_desc, time_type):
         "normal": "【🤖 T+1短线量化算法 · 日常推送】"
     }
     tip_map = {
-        "morning": "早盘前瞻：提前筛选当日备选标的，等待尾盘定点介入",
-        "open": "开盘参考：集合竞价结束，观察量能与开盘溢价",
-        "close": "收盘总结：当日标的复盘，明日持仓隔日处理规划",
-        "normal": "尾盘14:55左右买入，次日14:45前清仓"
+        "morning": "早盘前瞻：提前筛选当日备选标的，量化多维度综合评分排序",
+        "open": "开盘参考：集合竞价结束，观察量能与开盘溢价情况",
+        "close": "收盘总结：当日标的复盘，量化策略运行效果回顾",
+        "normal": "量化多因子选股，仅保留红盘上涨标的，按综合得分排序"
     }
     msg = f"""==================================================
 {title_map[time_type]}
@@ -416,12 +416,11 @@ def build_message(stock_list, market_desc, time_type):
 【📊 T+1短线标的 · 仅保留红盘上涨个股，按总分降序取前3只】
 """
     if stock_list:
-        for idx, s in enumerate(stock_list, 1):
+        for s in stock_list:
             tag = "【保底银行股】" if s["pool_type"] == "guarantee" else ""
             msg += f"""
-【排名{idx}】{tag}{s['code']} {s['name']}
+{tag}{s['code']} {s['name']}
 💵 现价：{s['tech']['price']}元｜涨幅：+{s['tech']['day_change']}%｜量比：{s['tech']['volume_ratio']}
-📉 止损：{s['stats']['price_range_low']}元｜止盈：{s['stats']['price_range_high']}元
 📊 RSI：{s['tech']['rsi']}｜MACD：{"正" if s['tech']['macd_positive'] else "负"}｜KDJ金叉：{"是" if s['tech']['kdj_gold'] else "否"}
 ⭐ 综合打分：{s['total_score']}
 --------------------------------------------------
@@ -430,10 +429,8 @@ def build_message(stock_list, market_desc, time_type):
         msg += "⚠️ 今日暂无符合条件标的\n"
     msg += """
 ==================================================
-💡 T+1纪律
-1. 尾盘14:55买入，次日14:45前清仓
-2. 严格止损，绝不扛单
-3. 数据仅供学习，禁止跟单
+⚠️ 风险提示
+市场有风险，投资需谨慎。本内容仅为量化算法运行结果，不构成任何投资建议。
 ==================================================
 """
     return msg[:1800]
