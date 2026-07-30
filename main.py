@@ -53,7 +53,7 @@ def get_standard_now():
 def get_time_type():
     now = get_standard_now()
     h, m = now.hour, now.minute
-    if h == 7 and m == 10:
+    if h == 7 and m == 40:
         return "morning"
     elif h == 9 and m == 30:
         return "open"
